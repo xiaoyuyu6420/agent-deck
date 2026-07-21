@@ -106,15 +106,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist-out
-          find target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" \) -print || true
+          # Only pick real bundles from target/.../bundle/ — avoid rustc build_script_build noise.
           while IFS= read -r f; do
-            cp -v "$f" dist-out/
-          done < <(find target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" \) 2>/dev/null || true)
+            cp -v "$f" "dist-out/$(basename "$f")"
+          done < <(find target -type f -path "*/bundle/*" \( -name "*.dmg" -o -name "*.app.tar.gz" \) 2>/dev/null || true)
           if [ -z "$(ls -A dist-out 2>/dev/null || true)" ]; then
-            while IFS= read -r app; do
-              base=$(basename "$app" .app)
-              ditto -c -k --sequesterRsrc --keepParent "$app" "dist-out/${base}-${{ matrix.platform }}.zip"
-            done < <(find target -type d -name "Agent Deck.app" 2>/dev/null || true)
+            echo "WARN: no .dmg/.app.tar.gz found under bundle/"
+            find target -type d -name "*.app" -path "*/bundle/*" -print || true
           fi
           ls -la dist-out || true
 
@@ -123,7 +121,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist-out | Out-Null
-          Get-ChildItem -Path target -Recurse -Include *.msi,*.exe,*.nsis.zip -ErrorAction SilentlyContinue |
+          # Restrict to target\...\bundle\ to skip rustc build_script_build-*.exe
+          Get-ChildItem -Path target -Recurse -Directory -Filter bundle -ErrorAction SilentlyContinue |
+            Get-ChildItem -Recurse -File -Include *.msi,*-setup.exe,*.exe,*.nsis.zip -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName dist-out/ -Force; $_.FullName }
           Get-ChildItem dist-out -ErrorAction SilentlyContinue
 
@@ -133,10 +133,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist-out
-          find target -type f \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -print || true
           while IFS= read -r f; do
-            cp -v "$f" dist-out/
-          done < <(find target -type f \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) 2>/dev/null || true)
+            cp -v "$f" "dist-out/$(basename "$f")"
+          done < <(find target -type f -path "*/bundle/*" \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) 2>/dev/null || true)
           ls -la dist-out || true
 
       - name: Upload build artifacts
