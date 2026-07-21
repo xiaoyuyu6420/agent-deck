@@ -1,0 +1,180 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional tag name for artifact naming (e.g. v0.1.0-dev)"
+        required: false
+        default: "manual"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-aarch64
+            os: macos-14
+            args: --target aarch64-apple-darwin
+            rust_target: aarch64-apple-darwin
+          - platform: macos-x86_64
+            os: macos-13
+            args: --target x86_64-apple-darwin
+            rust_target: x86_64-apple-darwin
+          - platform: windows-x86_64
+            os: windows-latest
+            args: ""
+            rust_target: ""
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            args: ""
+            rust_target: ""
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: ${{ matrix.platform }}
+
+      - name: Install Linux system deps
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            libxdo-dev
+
+      - name: Install frontend deps (workspace root)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unsigned local/CI builds; set Apple cert secrets later for notarized DMG.
+        with:
+          projectPath: apps/desktop
+          args: ${{ matrix.args }}
+          # Do not create a GitHub Release here; we collect artifacts and release in a follow-up job.
+          uploadReleaseAssets: false
+          includeUpdaterJson: false
+
+      - name: Collect artifacts (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-out
+          # bundle path for tauri 2
+          find target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" \) -print || true
+          while IFS= read -r f; do
+            cp -v "$f" dist-out/
+          done < <(find target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" \) 2>/dev/null || true)
+          # also copy .app as zip if no dmg
+          if [ -z "$(ls -A dist-out 2>/dev/null || true)" ]; then
+            while IFS= read -r app; do
+              base=$(basename "$app" .app)
+              ditto -c -k --sequesterRsrc --keepParent "$app" "dist-out/${base}-${{ matrix.platform }}.zip"
+            done < <(find target -type d -name "Agent Deck.app" 2>/dev/null || true)
+          fi
+          ls -la dist-out || true
+
+      - name: Collect artifacts (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-out | Out-Null
+          Get-ChildItem -Path target -Recurse -Include *.msi,*.exe,*.nsis.zip -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName dist-out/ -Force; $_.FullName }
+          Get-ChildItem dist-out -ErrorAction SilentlyContinue
+
+      - name: Collect artifacts (Linux)
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-out
+          find target -type f \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -print || true
+          while IFS= read -r f; do
+            cp -v "$f" dist-out/
+          done < <(find target -type f \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) 2>/dev/null || true)
+          ls -la dist-out || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-deck-${{ matrix.platform }}
+          path: dist-out/*
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find artifacts -type f -print
+          find artifacts -type f -exec cp -v {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

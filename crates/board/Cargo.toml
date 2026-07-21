@@ -1,0 +1,13 @@
+[package]
+name = "agent-deck-board"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Session board, theme paint, slot allocator"
+
+[dependencies]
+agent-deck-protocol = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

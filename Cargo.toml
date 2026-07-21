@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/protocol",
+  "crates/board",
+  "crates/zcode",
+  "crates/host-core",
+  "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["agent-deck"]
+
+[workspace.dependencies]
+agent-deck-protocol = { path = "crates/protocol" }
+agent-deck-board = { path = "crates/board" }
+agent-deck-zcode = { path = "crates/zcode" }
+agent-deck-host-core = { path = "crates/host-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"

@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500" font-family="monospace">
+  <!-- 板框 100x100mm，按 5x 比例画 500x500 -->
+  <rect x="10" y="10" width="480" height="480" fill="#1a1a1a" stroke="#444" stroke-width="2" rx="12"/>
+
+  <!-- USB-C 顶边居中 -->
+  <rect x="220" y="2" width="60" height="20" fill="#888" stroke="#666"/>
+  <text x="250" y="55" text-anchor="middle" fill="#888" font-size="11">USB-C</text>
+
+  <!-- 安装孔 4 角 M2 -->
+  <circle cx="35" cy="35" r="8" fill="none" stroke="#666" stroke-width="1.5"/>
+  <circle cx="465" cy="35" r="8" fill="none" stroke="#666" stroke-width="1.5"/>
+  <circle cx="35" cy="465" r="8" fill="none" stroke="#666" stroke-width="1.5"/>
+  <circle cx="465" cy="465" r="8" fill="none" stroke="#666" stroke-width="1.5"/>
+
+  <!-- Row 0: A1..A5 (5 个状态键，每键底 RGB) -->
+  <!-- 中心距 19.05mm × 5 = 95.25mm，居中分布 -->
+  <!-- 起点 x: (100 - 4*19.05)/2 = 11.9mm -->
+  <g font-size="14" fill="#fff" text-anchor="middle">
+    <!-- A1 -->
+    <rect x="75" y="100" width="80" height="80" fill="#222" stroke="#304FFE" stroke-width="2" rx="6"/>
+    <circle cx="115" cy="140" r="6" fill="#304FFE"/>
+    <text x="115" y="200">A1</text>
+
+    <!-- A2 -->
+    <rect x="165" y="100" width="80" height="80" fill="#222" stroke="#FF6D00" stroke-width="2" rx="6"/>
+    <circle cx="205" cy="140" r="6" fill="#FF6D00"/>
+    <text x="205" y="200">A2</text>
+
+    <!-- A3 -->
+    <rect x="255" y="100" width="80" height="80" fill="#222" stroke="#00FF4C" stroke-width="2" rx="6"/>
+    <circle cx="295" cy="140" r="6" fill="#00FF4C"/>
+    <text x="295" y="200">A3</text>
+
+    <!-- A4 -->
+    <rect x="345" y="100" width="80" height="80" fill="#222" stroke="#444" stroke-width="2" rx="6"/>
+    <circle cx="385" cy="140" r="6" fill="#444"/>
+    <text x="385" y="200">A4</text>
+
+    <!-- A5 -->
+    <rect x="435" y="100" width="0" height="0"/>
+    <!-- 5 键刚好填满 100mm，最后一键放在右边 -->
+  </g>
+
+  <!-- Row 1: OK/NO/STOP/NEW/PTT -->
+  <g font-size="12" fill="#aaa" text-anchor="middle">
+    <rect x="75" y="240" width="60" height="60" fill="#222" stroke="#555" stroke-width="1.5" rx="4"/>
+    <text x="105" y="275">OK</text>
+
+    <rect x="145" y="240" width="60" height="60" fill="#222" stroke="#555" stroke-width="1.5" rx="4"/>
+    <text x="175" y="275">NO</text>
+
+    <rect x="215" y="240" width="60" height="60" fill="#222" stroke="#555" stroke-width="1.5" rx="4"/>
+    <text x="245" y="275">STOP</text>
+
+    <rect x="285" y="240" width="60" height="60" fill="#222" stroke="#555" stroke-width="1.5" stroke-dasharray="3,3" rx="4"/>
+    <text x="315" y="275" fill="#666">NEW</text>
+
+    <rect x="355" y="240" width="60" height="60" fill="#222" stroke="#555" stroke-width="1.5" stroke-dasharray="3,3" rx="4"/>
+    <text x="385" y="275" fill="#666">PTT</text>
+  </g>
+
+  <!-- Row 2: FN/MOD/ENC/JOY/WF -->
+  <g font-size="11" fill="#aaa" text-anchor="middle">
+    <rect x="75" y="340" width="50" height="50" fill="#222" stroke="#555" stroke-width="1.5" stroke-dasharray="3,3" rx="4"/>
+    <text x="100" y="370" fill="#666">FN</text>
+
+    <rect x="135" y="340" width="50" height="50" fill="#222" stroke="#555" stroke-width="1.5" rx="4"/>
+    <text x="160" y="370">MOD</text>
+
+    <!-- 旋钮 -->
+    <circle cx="225" cy="365" r="28" fill="#222" stroke="#888" stroke-width="2"/>
+    <circle cx="225" cy="365" r="22" fill="#333"/>
+    <line x1="225" y1="365" x2="225" y2="345" stroke="#fff" stroke-width="2"/>
+    <text x="225" y="410">ENC</text>
+
+    <!-- 摇杆 -->
+    <circle cx="315" cy="365" r="22" fill="#222" stroke="#888" stroke-width="2"/>
+    <rect x="310" y="338" width="10" height="20" fill="#444"/>
+    <text x="315" y="410" fill="#666">JOY</text>
+
+    <rect x="365" y="340" width="50" height="50" fill="#222" stroke="#555" stroke-width="1.5" stroke-dasharray="3,3" rx="4"/>
+    <text x="390" y="370" fill="#666">WF</text>
+  </g>
+
+  <!-- 标签 -->
+  <text x="35" y="80" fill="#666" font-size="10">[A1] 状态键（每键底 RGB）</text>
+  <text x="35" y="225" fill="#666" font-size="10">[OK] 主操作（V1 仅 OK/NO/STOP 实装）</text>
+  <text x="35" y="320" fill="#666" font-size="10">[MOD] 功能层（虚线=V2 焊）</text>
+
+  <!-- BOOT / RESET -->
+  <rect x="40" y="450" width="20" height="10" fill="#444" stroke="#666"/>
+  <text x="50" y="475" text-anchor="middle" fill="#666" font-size="9">BOOT</text>
+
+  <rect x="440" y="450" width="20" height="10" fill="#444" stroke="#666"/>
+  <text x="450" y="475" text-anchor="middle" fill="#666" font-size="9">RST</text>
+
+  <!-- 标题 -->
+  <text x="250" y="490" text-anchor="middle" fill="#888" font-size="11">Agent Deck V1 — 100×100mm</text>
+</svg>

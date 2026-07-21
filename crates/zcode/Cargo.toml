@@ -1,0 +1,15 @@
+[package]
+name = "agent-deck-zcode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ZCode sqlite observer + row mapper"
+
+[dependencies]
+agent-deck-protocol = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

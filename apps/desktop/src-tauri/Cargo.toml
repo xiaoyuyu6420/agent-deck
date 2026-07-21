@@ -1,0 +1,26 @@
+[package]
+name = "agent-deck-desktop"
+version = "0.1.0"
+description = "Agent Deck desktop shell"
+authors = ["agent-deck"]
+edition = "2021"
+
+[lib]
+name = "agent_deck_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+agent-deck-host-core = { path = "../../../crates/host-core" }
+agent-deck-protocol = { path = "../../../crates/protocol" }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,33 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+coverage/
+.vscode/
+.idea/
+*.tsbuildinfo
+.env
+.env.local
+
+# firmware build artifacts
+firmware/build/
+firmware/*.uf2
+firmware/*.elf
+firmware/*.hex
+
+# hardware
+hardware/kicad/*.sch-bak
+hardware/kicad/*.pcb-bak
+hardware/kicad/_autosave*
+hardware/kicad/*-backups/
+hardware/gerber/
+hardware/bom/*.csv
+
+# Rust / Tauri
+/target/
+**/src-tauri/target/
+apps/desktop/dist/
+
+# local agent plans / secrets
+.zcode/
+.claude/
