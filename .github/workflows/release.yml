@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional tag name for artifact naming (e.g. v0.1.0-dev)"
+        description: "Optional label for artifacts (e.g. v0.1.0-dev)"
         required: false
         default: "manual"
 
@@ -33,7 +33,7 @@ jobs:
             args: --target aarch64-apple-darwin
             rust_target: aarch64-apple-darwin
           - platform: macos-x86_64
-            os: macos-13
+            os: macos-15
             args: --target x86_64-apple-darwin
             rust_target: x86_64-apple-darwin
           - platform: windows-x86_64
@@ -52,15 +52,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
+          cache: pnpm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -93,11 +94,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Unsigned local/CI builds; set Apple cert secrets later for notarized DMG.
         with:
           projectPath: apps/desktop
           args: ${{ matrix.args }}
-          # Do not create a GitHub Release here; we collect artifacts and release in a follow-up job.
           uploadReleaseAssets: false
           includeUpdaterJson: false
 
@@ -107,12 +106,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist-out
-          # bundle path for tauri 2
           find target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" \) -print || true
           while IFS= read -r f; do
             cp -v "$f" dist-out/
           done < <(find target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" \) 2>/dev/null || true)
-          # also copy .app as zip if no dmg
           if [ -z "$(ls -A dist-out 2>/dev/null || true)" ]; then
             while IFS= read -r app; do
               base=$(basename "$app" .app)
