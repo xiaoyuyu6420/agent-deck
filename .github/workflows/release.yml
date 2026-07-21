@@ -97,7 +97,6 @@ jobs:
         with:
           projectPath: apps/desktop
           args: ${{ matrix.args }}
-          uploadReleaseAssets: false
           includeUpdaterJson: false
 
       - name: Collect artifacts (macOS)
