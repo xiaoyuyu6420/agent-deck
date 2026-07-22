@@ -13,6 +13,7 @@ interface SlotBinding {
   status: DeckStatus
   detail?: string
   focused?: boolean
+  pinned?: boolean
 }
 
 interface LedSlot {
@@ -71,9 +72,12 @@ function render(board: BoardState, leds: LedFrame) {
       const occupied = slot.status !== 'off' && slot.sessionId
       const focused = slot.focused ? ' focused' : ''
       const empty = occupied ? '' : ' empty'
+      const pinned = slot.pinned ? ' pinned' : ''
+      const pinBadge = slot.pinned ? '<span class="pin-badge">📌</span>' : ''
       // The LED glow fills the keycap; the key IS the LED, as on the hardware.
       return `
-        <div class="key${focused}${empty}" data-i="${slot.i}">
+        <div class="key${focused}${empty}${pinned}" data-i="${slot.i}" data-session-id="${slot.sessionId ?? ''}">
+          ${pinBadge}
           <div class="key-led fx-${fx}" style="background:${rgbCss(rgb, br)}"></div>
           <div class="key-content">
             <span class="key-label">A${slot.i + 1}</span>
@@ -97,13 +101,23 @@ function render(board: BoardState, leds: LedFrame) {
         <button class="key-action reject" data-action="reject">NO</button>
         <button class="key-action stop" data-action="stop">STP</button>
       </div>
-      <div class="hint">拖动标题栏移动 · 点状态键聚焦 · 关窗后仍在托盘</div>
+      <div class="hint">拖动标题栏移动 · 点状态键聚焦 · ⌘/Ctrl+点 pin · 关窗后仍在托盘</div>
     </div>
   `
 
   app.querySelectorAll<HTMLElement>('.key[data-i]').forEach((el) => {
-    el.addEventListener('click', async () => {
+    el.addEventListener('click', async (ev) => {
       const i = Number(el.dataset.i)
+      // Cmd/Ctrl+click toggles pin; plain click focuses the slot.
+      if (ev.metaKey || ev.ctrlKey) {
+        const alreadyPinned = el.classList.contains('pinned')
+        const sessionId = el.dataset.sessionId || ''
+        await invoke('pin_slot', {
+          i,
+          sessionId: alreadyPinned || !sessionId ? null : sessionId,
+        })
+        return
+      }
       await invoke('set_focus', { i })
     })
   })

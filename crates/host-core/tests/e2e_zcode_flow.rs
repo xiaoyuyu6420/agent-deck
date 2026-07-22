@@ -178,6 +178,8 @@ CREATE TABLE tool_usage (
             exclude_workspaces: vec![],
             exclude_task_ids: vec![],
             slot_count: 5,
+            enable_codex: false,
+            codex_cli_path: None,
         })
         .unwrap()
     }
@@ -301,6 +303,8 @@ fn exclude_workspace_hides_self() {
         exclude_workspaces: vec!["/self/excluded".into()],
         exclude_task_ids: vec![],
         slot_count: 5,
+        enable_codex: false,
+        codex_cli_path: None,
     })
     .unwrap();
     host.tick().unwrap();

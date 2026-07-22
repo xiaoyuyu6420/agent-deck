@@ -60,6 +60,35 @@ impl SessionBoard {
         self.focus
     }
 
+    /// Pin a session to slot `i`, or unpin it when `session_id` is None.
+    /// Pinned slots reserve their position across recompute even if the session
+    /// disappears, so a task stays bound to a fixed key (the "memory point").
+    pub fn set_pin(&mut self, i: usize, session_id: Option<String>, now: u64) {
+        if i >= self.slot_count {
+            return;
+        }
+        match session_id {
+            Some(id) => {
+                self.pins.insert(i, id);
+            }
+            None => {
+                self.pins.remove(&i);
+            }
+        }
+        self.recompute(now);
+    }
+
+    /// Current pin map (slot index → session id), for persistence.
+    pub fn pins(&self) -> &HashMap<usize, String> {
+        &self.pins
+    }
+
+    /// Replace the whole pin map (e.g. when loading from disk on startup).
+    pub fn set_pins(&mut self, pins: HashMap<usize, String>, now: u64) {
+        self.pins = pins;
+        self.recompute(now);
+    }
+
     pub fn replace_backend_sessions(
         &mut self,
         backend: BackendId,
@@ -151,6 +180,7 @@ impl SessionBoard {
                         status: session.snapshot.status,
                         detail: session.snapshot.detail.clone(),
                         focused: Some(slot.i == self.focus),
+                        pinned: Some(slot.pinned),
                     }
                 } else {
                     SlotBinding {
@@ -161,6 +191,7 @@ impl SessionBoard {
                         status: DeckStatus::Off,
                         detail: None,
                         focused: Some(slot.i == self.focus),
+                        pinned: Some(slot.pinned),
                     }
                 }
             })
@@ -193,6 +224,52 @@ fn compute_urgency(snapshot: &SessionSnapshot, now: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_pin_reserves_slot_and_marks_board() {
+        let mut board = SessionBoard::new(5);
+        board.replace_backend_sessions(
+            BackendId::Zcode,
+            vec![
+                SessionSnapshot {
+                    backend: BackendId::Zcode,
+                    session_id: "a".into(),
+                    title: "A".into(),
+                    status: DeckStatus::Working,
+                    risk: None,
+                    detail: None,
+                    waiting_since: None,
+                    updated_at: 100,
+                    workspace_path: None,
+                },
+                SessionSnapshot {
+                    backend: BackendId::Zcode,
+                    session_id: "b".into(),
+                    title: "B".into(),
+                    status: DeckStatus::Done,
+                    risk: None,
+                    detail: None,
+                    waiting_since: None,
+                    updated_at: 200,
+                    workspace_path: None,
+                },
+            ],
+            1000,
+        );
+        // Pin the lower-priority "b" into slot 0 — it must stay there.
+        board.set_pin(0, Some("b".into()), 1000);
+        let state = board.board_state().unwrap();
+        assert_eq!(state.slots[0].session_id.as_deref(), Some("b"));
+        assert_eq!(state.slots[0].pinned, Some(true));
+        assert_eq!(state.slots[1].session_id.as_deref(), Some("a"));
+        assert_eq!(state.slots[1].pinned, Some(false));
+
+        // Unpin restores free allocation.
+        board.set_pin(0, None, 1000);
+        let state = board.board_state().unwrap();
+        assert_eq!(state.slots[0].pinned, Some(false));
+        assert_eq!(state.slots[0].session_id.as_deref(), Some("a"));
+    }
 
     #[test]
     fn working_session_paints_blue() {

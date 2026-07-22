@@ -54,13 +54,19 @@ CREATE TABLE tool_usage (
 }
 
 fn service_with(tasks: PathBuf, tool: PathBuf) -> DesktopService {
-    DesktopService::new(HostConfig {
-        tasks_db_path: tasks,
-        tool_db_path: tool,
-        exclude_workspaces: vec![],
-        exclude_task_ids: vec![],
-        slot_count: 5,
-    })
+    // Disable pin persistence in tests so ~/.agent-deck/pins.json never leaks in.
+    DesktopService::new_with_pins_path(
+        HostConfig {
+            tasks_db_path: tasks,
+            tool_db_path: tool,
+            exclude_workspaces: vec![],
+            exclude_task_ids: vec![],
+            slot_count: 5,
+            enable_codex: false,
+            codex_cli_path: None,
+        },
+        None,
+    )
     .unwrap()
 }
 
@@ -147,4 +153,65 @@ fn real_sqlite_path_disables_demo() {
     let occupied = leds.slots.iter().find(|s| s.rgb.is_some()).unwrap();
     assert_eq!(occupied.fx, LedFx::Breathe);
     let _ = dir;
+}
+
+#[test]
+fn pin_slot_marks_board_and_persists() {
+    let dir = tempdir().unwrap();
+    let (_fixture, tasks, tool) = empty_fixture();
+    let pins_path = dir.path().join("pins.json");
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let tasks_db = Connection::open(&tasks).unwrap();
+    tasks_db
+        .execute(
+            "INSERT INTO tasks (workspace_key, workspace_path, task_id, title, task_status, created_at, updated_at, deleted, archived)
+             VALUES ('ws:p','/tmp','sess_pin','Pinned','running',?1,?1,0,0)",
+            rusqlite::params![t as i64],
+        )
+        .unwrap();
+    drop(tasks_db);
+
+    let mut svc = DesktopService::new_with_pins_path(
+        HostConfig {
+            tasks_db_path: tasks.clone(),
+            tool_db_path: tool.clone(),
+            exclude_workspaces: vec![],
+            exclude_task_ids: vec![],
+            slot_count: 5,
+            enable_codex: false,
+            codex_cli_path: None,
+        },
+        Some(pins_path.clone()),
+    )
+    .unwrap();
+    svc.tick_at(t).unwrap();
+    svc.pin_slot(0, Some("sess_pin".into()));
+
+    let board = svc.board_state();
+    assert_eq!(board.slots[0].session_id.as_deref(), Some("sess_pin"));
+    assert_eq!(board.slots[0].pinned, Some(true));
+    assert!(pins_path.exists(), "pin_slot should write pins.json");
+
+    // Reload from disk — pin must survive restart.
+    let mut svc2 = DesktopService::new_with_pins_path(
+        HostConfig {
+            tasks_db_path: tasks,
+            tool_db_path: tool,
+            exclude_workspaces: vec![],
+            exclude_task_ids: vec![],
+            slot_count: 5,
+            enable_codex: false,
+            codex_cli_path: None,
+        },
+        Some(pins_path),
+    )
+    .unwrap();
+    svc2.tick_at(t).unwrap();
+    let board2 = svc2.board_state();
+    assert_eq!(board2.slots[0].pinned, Some(true));
+    assert_eq!(board2.slots[0].session_id.as_deref(), Some("sess_pin"));
 }

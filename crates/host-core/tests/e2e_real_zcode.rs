@@ -26,6 +26,8 @@ fn real_config(slot_count: usize) -> HostConfig {
         exclude_workspaces: vec![],
         exclude_task_ids: vec![],
         slot_count,
+        enable_codex: false,
+        codex_cli_path: None,
     }
 }
 

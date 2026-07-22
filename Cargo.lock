@@ -18,6 +18,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-deck-codex"
+version = "0.1.0"
+dependencies = [
+ "agent-deck-protocol",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "agent-deck-desktop"
 version = "0.1.0"
 dependencies = [
@@ -36,6 +48,7 @@ name = "agent-deck-host-core"
 version = "0.1.0"
 dependencies = [
  "agent-deck-board",
+ "agent-deck-codex",
  "agent-deck-protocol",
  "agent-deck-zcode",
  "anyhow",

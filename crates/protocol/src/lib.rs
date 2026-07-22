@@ -131,6 +131,9 @@ pub struct SlotBinding {
     pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub focused: Option<bool>,
+    /// True when this slot is manually pinned to a session (survives recompute).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -181,6 +184,12 @@ pub enum Action {
         #[serde(default)]
         i: Option<usize>,
         text: String,
+    },
+    /// Pin a session to slot `i`. `session_id = None` unpins the slot.
+    Pin {
+        i: usize,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 }
 

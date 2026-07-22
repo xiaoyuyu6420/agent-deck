@@ -116,6 +116,8 @@ CREATE TABLE tool_usage (
             exclude_workspaces: vec![],
             exclude_task_ids: vec![],
             slot_count: 5,
+            enable_codex: false,
+            codex_cli_path: None,
         })
         .unwrap()
     }

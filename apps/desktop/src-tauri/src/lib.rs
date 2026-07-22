@@ -37,6 +37,8 @@ fn default_config() -> HostConfig {
         ],
         exclude_task_ids: vec![],
         slot_count: 8,
+        enable_codex: true,
+        codex_cli_path: None,
     }
 }
 
@@ -56,6 +58,17 @@ fn get_led_frame(state: State<'_, Arc<AppState>>) -> Result<LedFrame, String> {
 fn set_focus(state: State<'_, Arc<AppState>>, i: usize) -> Result<(), String> {
     let mut service = state.service.lock().map_err(|e| e.to_string())?;
     service.set_focus(i);
+    Ok(())
+}
+
+#[tauri::command]
+fn pin_slot(
+    state: State<'_, Arc<AppState>>,
+    i: usize,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    let mut service = state.service.lock().map_err(|e| e.to_string())?;
+    service.pin_slot(i, session_id);
     Ok(())
 }
 
@@ -92,6 +105,7 @@ pub fn run() {
             get_board_state,
             get_led_frame,
             set_focus,
+            pin_slot,
             dispatch_action
         ])
         .setup(move |app| {
