@@ -73,14 +73,15 @@ fn real_db_running_outranks_completed() {
     host.tick().expect("tick");
 
     let board = host.board_state().expect("board");
-    let occupied: Vec<_> = board.slots.iter().filter(|s| s.session_id.is_some()).collect();
+    let occupied: Vec<_> = board
+        .slots
+        .iter()
+        .filter(|s| s.session_id.is_some())
+        .collect();
 
-    let first_done = occupied.iter().position(|s| {
-        matches!(
-            s.status,
-            agent_deck_protocol::DeckStatus::Done
-        )
-    });
+    let first_done = occupied
+        .iter()
+        .position(|s| matches!(s.status, agent_deck_protocol::DeckStatus::Done));
     let last_active = occupied.iter().rposition(|s| {
         matches!(
             s.status,
@@ -88,9 +89,7 @@ fn real_db_running_outranks_completed() {
         )
     });
 
-    eprintln!(
-        "first_done_slot={first_done:?}  last_active_slot={last_active:?}",
-    );
+    eprintln!("first_done_slot={first_done:?}  last_active_slot={last_active:?}",);
     if let (Some(done), Some(active)) = (first_done, last_active) {
         assert!(
             active < done,
