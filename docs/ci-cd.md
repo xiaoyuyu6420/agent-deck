@@ -12,9 +12,11 @@
 | Platform | Runner | 产物（典型） |
 |---|---|---|
 | macOS aarch64 | `macos-14` | `.dmg` / `.app` |
-| macOS x86_64 | `macos-13` | `.dmg` / `.app` |
+| macOS x86_64 | `macos-15` | `.dmg` / `.app`（ARM64 runner 交叉编译 x86_64 target） |
 | Windows x86_64 | `windows-latest` | `.msi` / NSIS `.exe` |
 | Linux x86_64 | `ubuntu-22.04` | `.AppImage` / `.deb` |
+
+> 注：`macos-13` 已从 GitHub-hosted runners 退役，macOS x86_64 改用 `macos-15`（Apple Silicon）交叉编译 `x86_64-apple-darwin`。
 
 ## 使用方式
 

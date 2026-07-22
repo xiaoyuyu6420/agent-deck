@@ -20,6 +20,15 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  PNPM_VERSION: "10.33.0"
+  NODE_VERSION: "22"
+  # Shared Linux apt deps — keep ci.yml in sync via the same variable name.
+  LINUX_APT_DEPS: >-
+    libwebkit2gtk-4.1-dev
+    librsvg2-dev
+    patchelf
+    libgtk-3-dev
+    libayatana-appindicator3-dev
 
 jobs:
   build:
@@ -32,6 +41,8 @@ jobs:
             os: macos-14
             args: --target aarch64-apple-darwin
             rust_target: aarch64-apple-darwin
+          # macos-13 is retired from GitHub-hosted runners; macos-15 (ARM64) cross-compiles
+          # the x86_64-apple-darwin target via the rustup target installed above.
           - platform: macos-x86_64
             os: macos-15
             args: --target x86_64-apple-darwin
@@ -55,12 +66,12 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.33.0
+          version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Setup Rust
@@ -78,12 +89,9 @@ jobs:
         if: matrix.platform == 'linux-x86_64'
         run: |
           sudo apt-get update
+          # $LINUX_APT_DEPS mirrors ci.yml; libssl-dev/libxdo-dev are release-only bundling extras.
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
+            ${{ env.LINUX_APT_DEPS }} \
             libssl-dev \
             libxdo-dev
 
@@ -109,9 +117,15 @@ jobs:
           while IFS= read -r f; do
             cp -v "$f" "dist-out/$(basename "$f")"
           done < <(find target -type f -path "*/bundle/*" \( -name "*.dmg" -o -name "*.app.tar.gz" \) 2>/dev/null || true)
+          # Fallback: if no .dmg/.app.tar.gz upstream, tar the .app bundle so a runnable artifact still ships.
           if [ -z "$(ls -A dist-out 2>/dev/null || true)" ]; then
-            echo "WARN: no .dmg/.app.tar.gz found under bundle/"
-            find target -type d -name "*.app" -path "*/bundle/*" -print || true
+            echo "::warning::No .dmg/.app.tar.gz found under bundle/; falling back to .app tar."
+            app_dir=$(find target -type d -name "*.app" -path "*/bundle/*" | head -n1 || true)
+            if [ -n "$app_dir" ]; then
+              tar -czf "dist-out/$(basename "$app_dir").tar.gz" -C "$(dirname "$app_dir")" "$(basename "$app_dir")"
+            else
+              echo "::error::No .app bundle found either; artifact will be empty."
+            fi
           fi
           ls -la dist-out || true
 
@@ -120,9 +134,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist-out | Out-Null
-          # Restrict to target\...\bundle\ to skip rustc build_script_build-*.exe
+          # Restrict to target\...\bundle\ and to named installers — a bare *.exe would
+          # pick up NSIS intermediates (e.g. *-setup.7z.exe sidecar), not real installers.
           Get-ChildItem -Path target -Recurse -Directory -Filter bundle -ErrorAction SilentlyContinue |
-            Get-ChildItem -Recurse -File -Include *.msi,*-setup.exe,*.exe,*.nsis.zip -ErrorAction SilentlyContinue |
+            Get-ChildItem -Recurse -File -Include *.msi,*-setup.exe,*.nsis.zip -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName dist-out/ -Force; $_.FullName }
           Get-ChildItem dist-out -ErrorAction SilentlyContinue
 

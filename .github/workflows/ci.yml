@@ -14,6 +14,15 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  PNPM_VERSION: "10.33.0"
+  NODE_VERSION: "22"
+  # Shared Linux apt deps — keep release.yml in sync via the same variable name.
+  LINUX_APT_DEPS: >-
+    libwebkit2gtk-4.1-dev
+    librsvg2-dev
+    patchelf
+    libgtk-3-dev
+    libayatana-appindicator3-dev
 
 jobs:
   test:
@@ -27,12 +36,12 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.33.0
+          version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Setup Rust
@@ -46,12 +55,7 @@ jobs:
       - name: Install Linux deps (for desktop crate check)
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev
+          sudo apt-get install -y ${{ env.LINUX_APT_DEPS }}
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
