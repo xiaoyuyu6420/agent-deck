@@ -26,7 +26,7 @@ impl Default for HostConfig {
             tool_db_path: home.join(".zcode/cli/db/db.sqlite"),
             exclude_workspaces: vec![],
             exclude_task_ids: vec![],
-            slot_count: 5,
+            slot_count: 8,
         }
     }
 }

@@ -15,8 +15,8 @@
     "windows": [
       {
         "title": "Agent Deck",
-        "width": 360,
-        "height": 420,
+        "width": 420,
+        "height": 460,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,

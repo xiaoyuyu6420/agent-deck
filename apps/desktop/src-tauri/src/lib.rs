@@ -36,7 +36,7 @@ fn default_config() -> HostConfig {
                 .to_string(),
         ],
         exclude_task_ids: vec![],
-        slot_count: 5,
+        slot_count: 8,
     }
 }
 
