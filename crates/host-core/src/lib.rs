@@ -184,7 +184,7 @@ pub fn now_ms() -> u64 {
 /// Demo board used when no real zcode data is available (Phase R0).
 pub fn demo_board_state() -> (LedFrame, BoardState) {
     use agent_deck_protocol::*;
-    let mut board = SessionBoard::new(5);
+    let mut board = SessionBoard::new(SLOT_COUNT);
     let now = now_ms();
     board.replace_backend_sessions(
         BackendId::Zcode,

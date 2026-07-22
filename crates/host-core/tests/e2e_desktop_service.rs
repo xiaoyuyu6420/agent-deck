@@ -71,7 +71,7 @@ fn empty_db_falls_back_to_demo() {
     assert!(svc.using_demo());
     let board = svc.board_state();
     assert_eq!(board.msg_type, "board");
-    assert_eq!(board.slots.len(), 5);
+    assert_eq!(board.slots.len(), agent_deck_protocol::SLOT_COUNT);
     let occupied: Vec<_> = board
         .slots
         .iter()
@@ -80,7 +80,7 @@ fn empty_db_falls_back_to_demo() {
     assert!(occupied.len() >= 2, "demo should show sample sessions");
     let leds = svc.led_frame();
     assert_eq!(leds.msg_type, "leds");
-    assert_eq!(leds.slots.len(), 5);
+    assert_eq!(leds.slots.len(), agent_deck_protocol::SLOT_COUNT);
 }
 
 #[test]

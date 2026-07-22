@@ -55,9 +55,10 @@ function rgbCss(rgb: [number, number, number] | null, br: number): string {
 /**
  * Render the virtual keyboard.
  *
- * Row 0 = status keys (A1..An), one per slot; the keycap glows with the slot's
- * LED colour/animation just like the physical A1-A5 keys.
- * Row 1 = action keys (OK / NO / STP) mirroring the hardware OK/NO/STOP.
+ * Row 0 = status keys (A1..An), one per software slot; the keycap glows with
+ * the slot's LED colour/animation like the physical A1-A5 keys.
+ * Row 1 = action keys OK / NO / STP (the V1-soldered subset of the hardware
+ * action row OK/NO/STOP/NEW/PTT).
  */
 function render(board: BoardState, leds: LedFrame) {
   const keys = board.slots

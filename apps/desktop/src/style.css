@@ -1,10 +1,12 @@
 /* ── Agent Deck — virtual keyboard UI ────────────────────────────
-   Mirrors the physical 3×5 key matrix (docs/pcb.md):
-     Row 0: A1..An  status keys  (one per task slot)
-     Row 1: OK/NO/STP  action keys (Accept / Reject / Stop)
-   The desktop window itself is the keyboard. Each status key's background
-   uses the same LED rgb/brightness as the hardware so UI and device share
-   one palette. ─────────────────────────────────────────────────── */
+   Inspired by the physical key matrix (docs/pcb.md). The desktop window IS
+   the keyboard:
+     Row 0: status keys (A1..An, one per software slot — 8 by default, more
+            than the physical A1-A5 since software isn't bound by PCB space)
+     Row 1: action keys OK/NO/STP (the V1-soldered subset of the hardware's
+            OK/NO/STOP/NEW/PTT row)
+   Each status key's background uses the same LED rgb/brightness as the
+   hardware, so UI and device share one palette. ────────────────────── */
 
 .keyboard {
   display: flex;

@@ -36,7 +36,7 @@ deck 灯变绿/蓝/红  + 可选提示音/语音
 | 会话归属 | **观察 Desktop，不开新会话** | 嵌入现有工作流，不另起炉灶 |
 | 后端 | **ZCode + Codex** | Claude CLI hook 不可异步阻塞，等 Claude Desktop |
 | 平台 | **macOS 优先** | 主力 ZCode Desktop 在 Mac；Win 在 V3 加 |
-| 槽位数 | **5** | 100×100mm 标准 MX 间距物理上限 |
+| 槽位数 | **物理 5 / 软件默认 8** | 物理 5 是 100×100mm MX 间距上限（A1-A5）；软件槽位不受 PCB 限制，desktop 默认 8 |
 | 协议 | **USB CDC JSON Lines** | 调试友好，固件好实现 |
 
 ## 不做（V1）
@@ -56,3 +56,5 @@ deck 灯变绿/蓝/红  + 可选提示音/语音
 社区给 Cursor、Aider、自家 agent 写 adapter，就赢了。
 
 Codex Micro 卖 $230 封闭灯效；Agent Deck 卖的是 agent 操作台的 USB/HID 开放标准。
+
+具体设想与分级见 [roadmap.md](./roadmap.md)。原则：**做要克制（比 Codex 强一点就够），想都记下**。

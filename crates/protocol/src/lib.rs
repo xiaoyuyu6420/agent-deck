@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const SLOT_COUNT: usize = 5;
+pub const SLOT_COUNT: usize = 8;
 pub const DONE_TTL_MS: u64 = 5 * 60 * 1000;
 pub const URGENCY_FULL_WAIT_MS: u64 = 2 * 60 * 1000;
 pub const WORKING_LONG_MS: u64 = 5 * 60 * 1000;
