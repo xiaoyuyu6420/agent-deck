@@ -2,17 +2,60 @@
 //! Ported from packages/host/src/main.ts (core loop only)
 
 use agent_deck_board::SessionBoard;
-use agent_deck_protocol::{BackendId, BoardState, LedFrame, SessionSnapshot};
+use agent_deck_protocol::{BackendId, BoardState, DeckStatus, LedFrame, SessionSnapshot};
 use agent_deck_zcode::{SqliteObserver, SqliteObserverOptions};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Lightweight session row for the bind-picker UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    pub backend: BackendId,
+    pub session_id: String,
+    pub title: String,
+    pub status: DeckStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub updated_at: u64,
+}
+
+impl From<&SessionSnapshot> for SessionInfo {
+    fn from(s: &SessionSnapshot) -> Self {
+        Self {
+            backend: s.backend,
+            session_id: s.session_id.clone(),
+            title: s.title.clone(),
+            status: s.status,
+            workspace_path: s.workspace_path.clone(),
+            detail: s.detail.clone(),
+            updated_at: s.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckSettings {
+    /// When true, unbound slots auto-fill by priority. When false (default),
+    /// only manually pinned sessions show — empty keys stay Off.
+    #[serde(default)]
+    pub auto_fill: bool,
+}
+
 /// One backend's session observer (zcode / codex / future).
 pub trait BackendObserver: Send {
     fn id(&self) -> BackendId;
     fn poll(&mut self) -> anyhow::Result<Vec<SessionSnapshot>>;
+    /// Full history catalog for bind picker. Defaults to poll() result.
+    fn list_catalog(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
+        self.poll()
+    }
 }
 
 impl BackendObserver for SqliteObserver {
@@ -23,6 +66,10 @@ impl BackendObserver for SqliteObserver {
     fn poll(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
         Ok(self.poll_once()?)
     }
+
+    fn list_catalog(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
+        Ok(self.catalog_once()?)
+    }
 }
 
 impl BackendObserver for agent_deck_codex::CodexObserver {
@@ -32,6 +79,10 @@ impl BackendObserver for agent_deck_codex::CodexObserver {
 
     fn poll(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
         Ok(self.poll_once()?)
+    }
+
+    fn list_catalog(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
+        Ok(self.catalog_once()?)
     }
 }
 
@@ -162,6 +213,75 @@ impl HostCore {
         self.board.set_pins(pins, now_ms());
     }
 
+    pub fn set_auto_fill(&mut self, enabled: bool) {
+        self.board.set_auto_fill(enabled, now_ms());
+    }
+
+    pub fn auto_fill(&self) -> bool {
+        self.board.auto_fill()
+    }
+
+    /// Board-cache sessions (poll window). Prefer `list_catalog` for bind UI.
+    pub fn list_sessions(&self) -> Vec<SessionInfo> {
+        self.board
+            .list_sessions()
+            .iter()
+            .map(SessionInfo::from)
+            .collect()
+    }
+
+    /// Full history catalog across backends for the bind picker.
+    pub fn list_catalog(&mut self) -> Vec<SessionInfo> {
+        let mut out: Vec<SessionInfo> = Vec::new();
+        let mut seen = std::collections::HashSet::<String>::new();
+        for obs in &mut self.observers {
+            match obs.list_catalog() {
+                Ok(snaps) => {
+                    for s in snaps {
+                        let key = format!("{:?}:{}", s.backend, s.session_id);
+                        if seen.insert(key) {
+                            out.push(SessionInfo::from(&s));
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        out.sort_by(|a, b| {
+            b.status
+                .priority()
+                .cmp(&a.status.priority())
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
+        out
+    }
+
+    /// Resolve a session from catalog (or board cache) and pin it, so historical
+    /// sessions outside the poll window still bind correctly.
+    pub fn pin_session_from_catalog(&mut self, i: usize, session_id: Option<String>) {
+        match session_id {
+            None => self.set_pin(i, None),
+            Some(id) => {
+                if self.board.find_session(&id).is_none() {
+                    // Pull catalog and upsert the chosen historical session.
+                    let mut found: Option<SessionSnapshot> = None;
+                    for obs in &mut self.observers {
+                        if let Ok(snaps) = obs.list_catalog() {
+                            if let Some(snap) = snaps.into_iter().find(|s| s.session_id == id) {
+                                found = Some(snap);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(snap) = found {
+                        self.board.upsert_session(snap, now_ms());
+                    }
+                }
+                self.set_pin(i, Some(id));
+            }
+        }
+    }
+
     pub fn board_state(&self) -> Option<&BoardState> {
         self.board.board_state()
     }
@@ -177,47 +297,72 @@ impl HostCore {
     }
 }
 
-/// Desktop-facing service: host core + demo fallback + action stubs.
+/// Desktop-facing service: host core + action stubs.
 /// Used by Tauri commands so behavior is unit/integration testable without GUI.
+///
+/// Demo fallback is OFF by default: empty keys stay Off until the user binds
+/// a session (manual pin mode). Set `DeckSettings.auto_fill = true` to restore
+/// priority auto-fill of unbound slots.
 pub struct DesktopService {
     host: HostCore,
-    using_demo: bool,
     /// Where pin map is persisted across restarts. None disables persistence.
     pins_path: Option<PathBuf>,
+    settings_path: Option<PathBuf>,
+    settings: DeckSettings,
 }
 
 impl DesktopService {
     pub fn new(config: HostConfig) -> anyhow::Result<Self> {
-        Self::new_with_pins_path(config, Some(default_pins_path()))
+        Self::new_with_paths(
+            config,
+            Some(default_pins_path()),
+            Some(default_settings_path()),
+        )
     }
 
-    /// Construct with an explicit pins path (tests can inject a temp file).
+    /// Construct with explicit paths (tests inject temp files / disable persistence).
     pub fn new_with_pins_path(
         config: HostConfig,
         pins_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_paths(config, pins_path, None)
+    }
+
+    pub fn new_with_paths(
+        config: HostConfig,
+        pins_path: Option<PathBuf>,
+        settings_path: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
         let mut host = HostCore::new(config)?;
         let _ = host.tick();
+
+        let settings = settings_path
+            .as_ref()
+            .map(|p| load_settings(p))
+            .unwrap_or_default();
+        host.set_auto_fill(settings.auto_fill);
+
         if let Some(ref path) = pins_path {
             let pins = load_pins(path);
             if !pins.is_empty() {
                 host.set_pins(pins);
             }
         }
-        let using_demo = host.is_empty_board();
+
         Ok(Self {
             host,
-            using_demo,
             pins_path,
+            settings_path,
+            settings,
         })
     }
 
     pub fn from_host(host: HostCore) -> Self {
-        let using_demo = host.is_empty_board();
         Self {
             host,
-            using_demo,
             pins_path: None,
+            settings_path: None,
+            settings: DeckSettings::default(),
         }
     }
 
@@ -227,53 +372,65 @@ impl DesktopService {
 
     pub fn tick_at(&mut self, now: u64) -> anyhow::Result<()> {
         self.host.tick_at(now)?;
-        self.using_demo = self.host.is_empty_board();
         Ok(())
     }
 
     pub fn board_state(&self) -> BoardState {
-        if self.using_demo {
-            demo_board_state().1
-        } else {
-            self.host
-                .board_state()
-                .cloned()
-                .unwrap_or_else(|| demo_board_state().1)
+        if let Some(b) = self.host.board_state() {
+            return b.clone();
         }
+        // Should be rare (before first recompute): return empty Off slots.
+        let mut board = SessionBoard::new(8);
+        board.recompute(now_ms());
+        board.board_state().cloned().unwrap()
     }
 
     pub fn led_frame(&self) -> LedFrame {
-        if self.using_demo {
-            demo_board_state().0
-        } else {
-            self.host
-                .led_frame()
-                .cloned()
-                .unwrap_or_else(|| demo_board_state().0)
+        if let Some(l) = self.host.led_frame() {
+            return l.clone();
         }
+        let mut board = SessionBoard::new(8);
+        board.recompute(now_ms());
+        board.led_frame().cloned().unwrap()
     }
 
     pub fn set_focus(&mut self, i: usize) {
         self.host.set_focus(i);
-        self.using_demo = false;
     }
 
     pub fn set_focus_at(&mut self, i: usize, now: u64) {
         self.host.set_focus_at(i, now);
-        self.using_demo = false;
     }
 
-    /// Pin/unpin a session on a slot. Pinning forces real data mode (not demo).
+    /// Pin/unpin a session on a slot (manual bind). Historical catalog sessions are
+    /// upserted into the board so they survive the next poll window.
     pub fn pin_slot(&mut self, i: usize, session_id: Option<String>) {
-        self.host.set_pin(i, session_id);
-        self.using_demo = false;
+        self.host.pin_session_from_catalog(i, session_id);
         if let Some(ref path) = self.pins_path {
             let _ = save_pins(path, self.host.pins());
         }
     }
 
+    /// Full catalog for bind picker (all projects + history).
+    pub fn list_sessions(&mut self) -> Vec<SessionInfo> {
+        self.host.list_catalog()
+    }
+
+    pub fn settings(&self) -> &DeckSettings {
+        &self.settings
+    }
+
+    pub fn set_auto_fill(&mut self, enabled: bool) {
+        self.settings.auto_fill = enabled;
+        self.host.set_auto_fill(enabled);
+        if let Some(ref path) = self.settings_path {
+            let _ = save_settings(path, &self.settings);
+        }
+    }
+
+    /// Legacy helper: always false now (demo mode removed from production path).
     pub fn using_demo(&self) -> bool {
-        self.using_demo
+        false
     }
 
     pub fn dispatch_action(&self, action: &str) -> String {
@@ -299,6 +456,30 @@ pub fn default_pins_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     home.join(".agent-deck/pins.json")
+}
+
+/// Default settings path: `~/.agent-deck/settings.json`.
+pub fn default_settings_path() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".agent-deck/settings.json")
+}
+
+pub fn load_settings(path: &Path) -> DeckSettings {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return DeckSettings::default();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn save_settings(path: &Path, settings: &DeckSettings) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let raw = serde_json::to_string_pretty(settings)?;
+    fs::write(path, raw)?;
+    Ok(())
 }
 
 /// Load pin map from disk. Missing/invalid file → empty map (no crash).

@@ -86,11 +86,48 @@ impl SqliteObserver {
         Ok(())
     }
 
+    /// Board poll: recent active-ish tasks only (keeps LED path cheap).
     pub fn poll_once(&mut self) -> Result<Vec<SessionSnapshot>, ObserverError> {
-        let Some(conn) = self.conn.as_ref() else {
+        if self.conn.is_none() {
             return Ok(self.last_snapshots.clone());
-        };
+        }
+        let snapshots =
+            self.query_tasks("t.task_status IN ('running', 'completed', 'error')", 20)?;
+        let signature = signature_of(&snapshots);
+        if signature != self.last_signature {
+            self.last_signature = signature;
+        }
+        self.last_snapshots = snapshots.clone();
+        Ok(snapshots)
+    }
 
+    /// Full catalog for bind picker: all non-deleted/non-archived tasks across
+    /// every project, including older history beyond the board poll window.
+    pub fn catalog_once(&mut self) -> Result<Vec<SessionSnapshot>, ObserverError> {
+        if self.conn.is_none() {
+            // Lazy open so bind UI works even if open() was skipped earlier.
+            let _ = self.open();
+        }
+        if self.conn.is_none() {
+            return Ok(vec![]);
+        }
+        // No status filter — any live task row is bindable history.
+        self.query_tasks("1=1", 500)
+    }
+
+    pub fn last_snapshots(&self) -> &[SessionSnapshot] {
+        &self.last_snapshots
+    }
+
+    fn query_tasks(
+        &self,
+        status_predicate: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionSnapshot>, ObserverError> {
+        let conn = self
+            .conn
+            .as_ref()
+            .expect("query_tasks requires an open connection");
         let sql = format!(
             r#"
 SELECT
@@ -118,11 +155,11 @@ SELECT
     LIMIT 1
   ) AS detail
 FROM tasks t
-WHERE t.task_status IN ('running', 'completed', 'error')
+WHERE {status_predicate}
   AND t.deleted = 0
   AND t.archived = 0
 ORDER BY t.updated_at DESC
-LIMIT 20
+LIMIT {limit}
 "#
         );
 
@@ -148,19 +185,7 @@ LIMIT 20
             }
             snapshots.push(snap);
         }
-
-        let signature = signature_of(&snapshots);
-        if signature != self.last_signature {
-            self.last_signature = signature;
-            self.last_snapshots = snapshots.clone();
-        } else {
-            self.last_snapshots = snapshots.clone();
-        }
         Ok(snapshots)
-    }
-
-    pub fn last_snapshots(&self) -> &[SessionSnapshot] {
-        &self.last_snapshots
     }
 
     fn is_excluded(&self, snap: &SessionSnapshot) -> bool {

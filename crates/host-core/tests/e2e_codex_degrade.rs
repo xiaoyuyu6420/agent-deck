@@ -82,6 +82,7 @@ fn missing_codex_cli_does_not_break_zcode() {
         None,
     )
     .unwrap();
+    svc.set_auto_fill(true);
     svc.tick_at(t).unwrap();
     assert!(!svc.using_demo());
     let board = svc.board_state();

@@ -12,8 +12,12 @@ pub struct CodexObserverOptions {
     pub cli_path: Option<PathBuf>,
     /// Only surface threads updated within this many seconds (filters notLoaded noise).
     pub recency_window_secs: u64,
-    /// Max threads to keep after filtering/sorting.
+    /// Max threads to keep after filtering/sorting (board poll).
     pub max_threads: usize,
+    /// Max threads returned by the bind-picker catalog.
+    pub catalog_max_threads: usize,
+    /// Recency window for catalog idle/history threads (seconds).
+    pub catalog_recency_window_secs: u64,
 }
 
 impl Default for CodexObserverOptions {
@@ -22,6 +26,9 @@ impl Default for CodexObserverOptions {
             cli_path: None,
             recency_window_secs: 24 * 60 * 60,
             max_threads: 20,
+            catalog_max_threads: 200,
+            // Keep a much longer history window for manual bind.
+            catalog_recency_window_secs: 90 * 24 * 60 * 60,
         }
     }
 }
@@ -61,6 +68,34 @@ impl CodexObserver {
     }
 
     pub fn poll_once(&mut self) -> Result<Vec<SessionSnapshot>, RpcError> {
+        let snaps = self.fetch_threads(
+            self.opts.recency_window_secs,
+            self.opts.max_threads,
+            /*keep_idle=*/ false,
+        )?;
+        self.last_snapshots = snaps.clone();
+        Ok(snaps)
+    }
+
+    /// Full-ish catalog for bind picker: keep idle/history threads in a long window.
+    pub fn catalog_once(&mut self) -> Result<Vec<SessionSnapshot>, RpcError> {
+        self.fetch_threads(
+            self.opts.catalog_recency_window_secs,
+            self.opts.catalog_max_threads,
+            /*keep_idle=*/ true,
+        )
+    }
+
+    pub fn last_snapshots(&self) -> &[SessionSnapshot] {
+        &self.last_snapshots
+    }
+
+    fn fetch_threads(
+        &mut self,
+        recency_window_secs: u64,
+        max_threads: usize,
+        keep_idle: bool,
+    ) -> Result<Vec<SessionSnapshot>, RpcError> {
         if self.client.is_none() && !self.open_failed {
             if let Err(e) = self.open() {
                 self.open_failed = true;
@@ -70,7 +105,11 @@ impl CodexObserver {
             }
         }
         let Some(client) = self.client.as_mut() else {
-            return Ok(self.last_snapshots.clone());
+            return Ok(if keep_idle {
+                vec![]
+            } else {
+                self.last_snapshots.clone()
+            });
         };
 
         let result: ThreadListResult = match client.request("thread/list", serde_json::json!({})) {
@@ -78,7 +117,11 @@ impl CodexObserver {
             Err(_) => {
                 // Drop dead client; next poll will try reconnect once.
                 self.client = None;
-                return Ok(self.last_snapshots.clone());
+                return Ok(if keep_idle {
+                    vec![]
+                } else {
+                    self.last_snapshots.clone()
+                });
             }
         };
 
@@ -86,7 +129,6 @@ impl CodexObserver {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let window = self.opts.recency_window_secs;
 
         let mut threads = result.data;
         // Prefer active/waiting, then recent updates.
@@ -103,34 +145,33 @@ impl CodexObserver {
         let snaps: Vec<SessionSnapshot> = threads
             .iter()
             .filter(|t| {
-                // Always keep active/error; idle/notLoaded only if recent.
+                // Always keep active/error; idle/notLoaded only if recent enough.
                 match &t.status {
                     crate::mapper::ThreadStatus::Active { .. }
                     | crate::mapper::ThreadStatus::SystemError => true,
                     _ => {
                         let ua = t.updated_at.or(t.recency_at).unwrap_or(0);
-                        now_sec.saturating_sub(ua) <= window
+                        now_sec.saturating_sub(ua) <= recency_window_secs
                     }
                 }
             })
-            .take(self.opts.max_threads)
+            .take(max_threads)
             .map(map_thread)
-            // Idle/notLoaded map to Idle; drop pure Idle so they don't fill slots
-            // ahead of zcode working tasks. Keep Error/Working/Waiting/Done.
             .filter(|s| {
-                !matches!(
-                    s.status,
-                    agent_deck_protocol::DeckStatus::Idle | agent_deck_protocol::DeckStatus::Off
-                )
+                if keep_idle {
+                    true
+                } else {
+                    // Board poll: drop pure Idle so they don't fill slots.
+                    !matches!(
+                        s.status,
+                        agent_deck_protocol::DeckStatus::Idle
+                            | agent_deck_protocol::DeckStatus::Off
+                    )
+                }
             })
             .collect();
 
-        self.last_snapshots = snaps.clone();
         Ok(snaps)
-    }
-
-    pub fn last_snapshots(&self) -> &[SessionSnapshot] {
-        &self.last_snapshots
     }
 }
 

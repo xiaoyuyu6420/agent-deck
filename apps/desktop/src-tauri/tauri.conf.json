@@ -17,14 +17,23 @@
         "title": "Agent Deck",
         "width": 420,
         "height": 460,
-        "resizable": false,
+        "minWidth": 340,
+        "minHeight": 380,
+        "maxWidth": 720,
+        "maxHeight": 900,
+        "resizable": true,
         "fullscreen": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": true,
-        "label": "main"
+        "label": "main",
+        "windowEffects": {
+          "effects": ["hudWindow"],
+          "state": "active",
+          "radius": 18
+        }
       }
     ],
     "security": {

@@ -15,6 +15,8 @@ pub struct SessionBoard {
     sessions: HashMap<String, SessionSnapshot>,
     focus: usize,
     pins: HashMap<usize, String>,
+    /// When false, only pinned sessions occupy slots (manual bind mode).
+    auto_fill: bool,
     mode: PolicyMode,
     last_led: Option<LedFrame>,
     last_board: Option<BoardState>,
@@ -34,10 +36,46 @@ impl SessionBoard {
             sessions: HashMap::new(),
             focus: 0,
             pins: HashMap::new(),
+            // Algorithm default is auto-fill; DesktopService may disable it for
+            // manual-bind UX (empty keys until the user pins a session).
+            auto_fill: true,
             mode: PolicyMode::Act,
             last_led: None,
             last_board: None,
         }
+    }
+
+    pub fn set_auto_fill(&mut self, enabled: bool, now: u64) {
+        self.auto_fill = enabled;
+        self.recompute(now);
+    }
+
+    pub fn auto_fill(&self) -> bool {
+        self.auto_fill
+    }
+
+    /// All known sessions across backends (board cache; prefer catalog for bind UI).
+    pub fn list_sessions(&self) -> Vec<SessionSnapshot> {
+        let mut out: Vec<SessionSnapshot> = self.sessions.values().cloned().collect();
+        out.sort_by(|a, b| {
+            b.status
+                .priority()
+                .cmp(&a.status.priority())
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
+        out
+    }
+
+    /// Insert/replace a session snapshot without wiping the rest of the backend.
+    /// Used when the user binds a historical session from the catalog.
+    pub fn upsert_session(&mut self, snapshot: SessionSnapshot, now: u64) {
+        let k = Self::key(snapshot.backend, &snapshot.session_id);
+        self.sessions.insert(k, snapshot);
+        self.recompute(now);
+    }
+
+    pub fn find_session(&self, session_id: &str) -> Option<&SessionSnapshot> {
+        self.sessions.values().find(|s| s.session_id == session_id)
     }
 
     fn key(backend: BackendId, session_id: &str) -> String {
@@ -48,6 +86,10 @@ impl SessionBoard {
                 BackendId::Codex => "codex",
             }
         )
+    }
+
+    fn is_pinned_session(&self, session_id: &str) -> bool {
+        self.pins.values().any(|id| id == session_id)
     }
 
     pub fn set_focus(&mut self, i: usize) {
@@ -99,17 +141,33 @@ impl SessionBoard {
             BackendId::Zcode => "zcode:",
             BackendId::Codex => "codex:",
         };
+        // Preserve manually pinned historical sessions even if they fall outside
+        // the board poll window (LIMIT 20 / Done TTL / idle filter).
+        let pinned_keep: HashMap<String, SessionSnapshot> = self
+            .sessions
+            .iter()
+            .filter(|(k, s)| k.starts_with(prefix) && self.is_pinned_session(&s.session_id))
+            .map(|(k, s)| (k.clone(), s.clone()))
+            .collect();
+
         self.sessions.retain(|k, _| !k.starts_with(prefix));
         for s in snapshots {
             let k = Self::key(backend, &s.session_id);
             self.sessions.insert(k, s);
         }
+        for (k, s) in pinned_keep {
+            self.sessions.entry(k).or_insert(s);
+        }
         self.recompute(now);
     }
 
     pub fn recompute(&mut self, now: u64) {
-        // purge expired done
+        // purge expired done — but never drop a manually pinned session
+        let pinned_ids: std::collections::HashSet<String> = self.pins.values().cloned().collect();
         self.sessions.retain(|_, s| {
+            if pinned_ids.contains(&s.session_id) {
+                return true;
+            }
             !(s.status == DeckStatus::Done && now.saturating_sub(s.updated_at) > DONE_TTL_MS)
         });
 
@@ -127,7 +185,15 @@ impl SessionBoard {
             focus: Some(self.focus),
             pins: self.pins.clone(),
         };
-        let allocated = allocate_slots(&scored, &opts, now);
+        let mut allocated = allocate_slots(&scored, &opts, now);
+        // Manual mode: clear non-pinned slots so unbound keys stay Off.
+        if !self.auto_fill {
+            for slot in &mut allocated {
+                if !slot.pinned {
+                    slot.session = None;
+                }
+            }
+        }
         let led = self.build_led_frame(&allocated, now);
         let board = self.build_board_state(&allocated);
         self.last_led = Some(led);

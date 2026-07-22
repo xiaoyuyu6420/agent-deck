@@ -71,22 +71,17 @@ fn service_with(tasks: PathBuf, tool: PathBuf) -> DesktopService {
 }
 
 #[test]
-fn empty_db_falls_back_to_demo() {
+fn empty_db_shows_empty_board_not_demo() {
     let (_dir, tasks, tool) = empty_fixture();
     let svc = service_with(tasks, tool);
-    assert!(svc.using_demo());
+    assert!(!svc.using_demo());
     let board = svc.board_state();
     assert_eq!(board.msg_type, "board");
-    assert_eq!(board.slots.len(), agent_deck_protocol::SLOT_COUNT);
-    let occupied: Vec<_> = board
-        .slots
-        .iter()
-        .filter(|s| s.session_id.is_some())
-        .collect();
-    assert!(occupied.len() >= 2, "demo should show sample sessions");
+    // Manual-bind default: no fake demo sessions.
+    assert!(board.slots.iter().all(|s| s.session_id.is_none()));
     let leds = svc.led_frame();
     assert_eq!(leds.msg_type, "leds");
-    assert_eq!(leds.slots.len(), agent_deck_protocol::SLOT_COUNT);
+    assert_eq!(leds.slots.len(), board.slots.len());
 }
 
 #[test]
@@ -142,6 +137,8 @@ fn real_sqlite_path_disables_demo() {
     drop(tasks_db);
 
     let mut svc = service_with(tasks, tool);
+    // Auto-fill so unbound sessions appear without manual pin.
+    svc.set_auto_fill(true);
     svc.tick_at(t).unwrap();
     assert!(!svc.using_demo());
     let board = svc.board_state();

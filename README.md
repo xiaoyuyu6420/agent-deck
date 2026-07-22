@@ -72,6 +72,12 @@ pnpm --filter @agent-deck/host test:e2e
 
 日常开发与发布以 **Rust / Tauri** 为准。
 
+## Roadmap
+
+设想与分级见 [docs/roadmap.md](./docs/roadmap.md)。
+
+原则：**做要克制（比 Codex 强一点就够），想都记下**。近期 🟢：tmux status client、theme/风险规则配置化、CI/CD 与本地长任务 adapter。
+
 ## License
 
 MIT (软件) / CERN-OHL-S (硬件，后续)
