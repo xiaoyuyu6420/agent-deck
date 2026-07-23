@@ -102,4 +102,4 @@ rgb = lerpHex('#304FFE', '#7B1FA2', longRun)  // 蓝→紫
 paint({ status, risk, waitingSince, now }, palette = CODEX_THEME) → { rgb, br, fx }
 ```
 
-完整实现见 `packages/host/src/board/theme.ts`。
+完整实现见 `crates/board/src/theme.rs`。

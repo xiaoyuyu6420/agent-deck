@@ -115,7 +115,7 @@ V1 backend.accept 未实现，第 7 步返回 unsupported，ActionRouter emit `a
 
 ## 关键不变量
 
-- `packages/protocol/src/index.ts` 是三方唯一真相
+- `crates/protocol/src/lib.rs` 是三方唯一真相
 - DB **只读**，绝不写回 ~/.zcode / ~/.codex
 - Gateway 只绑 127.0.0.1，绝不暴露公网
 - backend 可独立失败（zcode 挂不影响 codex 灯）

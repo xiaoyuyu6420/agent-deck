@@ -1,6 +1,6 @@
 # USB / WebSocket 协议
 
-`packages/protocol/src/index.ts` 是 host / simulator / 固件 三方共用的**唯一真相源**。
+`crates/protocol/src/lib.rs` 是 host / UI / 固件 三方共用的**唯一真相源**。
 
 ## 传输层
 

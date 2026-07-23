@@ -1,4 +1,12 @@
-# Phase 0 手动验证（`pnpm verify`）
+# Phase 0 手动验证
+
+> ⚠️ **本文档已过时**（2026-07-23）：描述的 `pnpm verify` 命令基于已删除的 legacy TypeScript host 实现（`packages/host`），该命令已不存在。
+>
+> 当前的验证方式：
+> - 自动化回归：`pnpm test:rust`（含 host-core 全部 E2E）
+> - 手动观察：`pnpm dev:desktop` 启动 Tauri 桌面应用，观察真实 `~/.zcode` 状态
+>
+> 下文保留作历史参考，命令不再可用。
 
 `pnpm verify` 起一份连真实 `~/.zcode` 的 host，把每次 board 状态变化彩色打印到终端，
 用来肉眼对照 Phase 0 验收 Demo（方案 §12）的链路是否真的通。

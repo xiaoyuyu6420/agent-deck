@@ -2,7 +2,7 @@
 
 ## 状态
 
-主路径已切到 **Rust + Tauri 2**。旧 `packages/*` TypeScript 保留作 legacy oracle，不再作为 `pnpm dev` / `pnpm test` 默认入口。
+主路径已切到 **Rust + Tauri 2**，旧 TypeScript 实现（`packages/`）已删除，Rust 为唯一实现。
 
 ## 结构
 
@@ -11,10 +11,10 @@ crates/
   protocol/    共享类型（DeckStatus / LedFrame / BoardState / Action）
   board/       theme + slotAllocator + SessionBoard
   zcode/       mapper + SqliteObserver（双 sqlite 只读 + 30min 防陈旧）
+  codex/       CodexObserver（app-server JSON-RPC）
   host-core/   HostCore 编排 + DesktopService（Tauri IPC 业务层）+ E2E
 apps/
   desktop/     Tauri 2 悬浮窗 + 系统托盘
-packages/      legacy TS（对照用）
 ```
 
 ## 命令
@@ -31,10 +31,6 @@ pnpm dev
 
 # 打包
 pnpm build:desktop
-
-# legacy TS（可选）
-pnpm test:legacy
-pnpm dev:legacy
 ```
 
 ## E2E 覆盖清单

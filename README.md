@@ -1,10 +1,10 @@
 # Agent Deck
 
-> 跨工具的 AI agent 状态牌。被动观察 ZCode / Codex 会话状态，状态变化时提醒。
+> macOS 软件 Agent 操作台。观察 ZCode / Codex 会话状态，关键时刻不离开主键盘就能跳转、绑定、裁决。
 
 ## 定位
 
-**不是**会话入口、**不是**新工作流。**是**一块物理「状态牌」：嵌入现有工作流，长任务跑着的时候你不盯屏，灯告诉你状态。
+**不是**新会话入口（只跳转聚焦已有会话）、**不是**通用宏工具箱。**是**一个软件操作台：嵌入现有工作流，长任务跑着的时候你不盯屏，状态牌提醒你，需要时一键裁决。硬件状态牌是其可选 client 之一。详见 [docs/product.md](./docs/product.md)。
 
 ```
 你在 ZCode Desktop / Codex 里跑长任务 → 去干别的
@@ -40,10 +40,10 @@ crates/
   protocol/    共享类型（host / UI / 固件唯一真相）
   board/       theme + slotAllocator + SessionBoard
   zcode/       SqliteObserver + mapper
+  codex/       CodexObserver（app-server JSON-RPC）
   host-core/   编排 + DesktopService + E2E
 apps/
   desktop/     Tauri 2 悬浮窗 + 系统托盘
-packages/      旧 TypeScript 实现（legacy oracle，勿作主入口）
 docs/          产品与协议文档
 ```
 
@@ -59,24 +59,13 @@ docs/          产品与协议文档
 | done | 绿 | solid | 完成 |
 | error | 红 | solid | 错误 |
 
-详见 [docs/status-model.md](./docs/status-model.md) 与 [docs/rust-rewrite.md](./docs/rust-rewrite.md)。
-
-## Legacy TypeScript
-
-旧 `packages/host` + `packages/simulator` 仍可用作对照：
-
-```bash
-pnpm --filter @agent-deck/host test
-pnpm --filter @agent-deck/host test:e2e
-```
-
-日常开发与发布以 **Rust / Tauri** 为准。
+详见 [docs/status-model.md](./docs/status-model.md) 与 [docs/rust-rewrite.md](./docs/rust-rewrite.md)。术语定义见 [CONTEXT.md](./CONTEXT.md)。
 
 ## Roadmap
 
 设想与分级见 [docs/roadmap.md](./docs/roadmap.md)。
 
-原则：**做要克制（比 Codex 强一点就够），想都记下**。近期 🟢：tmux status client、theme/风险规则配置化、CI/CD 与本地长任务 adapter。
+原则：**做要克制（比 Codex 强一点就够），想都记下**。近期 🟢：裁决动作（Phase 0 探测 + Phase 1 Codex 实现，见 [docs/action-spec.md](./docs/action-spec.md)）、theme/风险规则配置化、CI/CD 与本地长任务 adapter。
 
 ## License
 
