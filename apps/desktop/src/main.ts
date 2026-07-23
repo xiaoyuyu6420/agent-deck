@@ -78,10 +78,29 @@ let sessionsCache: SessionInfo[] = []
 let longPressTimer: number | null = null
 let longPressFired = false
 
+/**
+ * Build the LED glow background for a key.
+ *
+ * The theme layer (theme.ts) emits semantic colors + brightness that are also
+ * the truth source for real hardware LED strips; we deliberately do NOT touch
+ * those values. Instead the on-screen rendering is shaped here so a bound key
+ * reads as a glowing indicator light rather than a flat color block:
+ *
+ *   - radial gradient: hot core fading to transparent at the edges
+ *   - brightness maps to overall opacity, but full-brightness (done/error)
+ *     is capped so it never blows out into a neon slab
+ *   - saturation is softened in CSS (see .key-led) to take the edge off the
+ *     pure #00FF4C / #FF0033 without losing recognizability
+ */
 function rgbCss(rgb: [number, number, number] | null, br: number): string {
   if (!rgb) return 'transparent'
-  const a = Math.max(0.25, br / 255)
-  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`
+  // brightness → opacity, but cap at ~0.8 so 255 doesn't overexpose.
+  const a = Math.min(0.8, Math.max(0.22, br / 255))
+  const [r, g, b] = rgb
+  const core = `rgba(${r}, ${g}, ${b}, ${a})`
+  const mid = `rgba(${r}, ${g}, ${b}, ${a * 0.55})`
+  const edge = `rgba(${r}, ${g}, ${b}, 0)`
+  return `radial-gradient(circle at 50% 42%, ${core} 0%, ${mid} 38%, ${edge} 78%)`
 }
 
 function escapeHtml(s: string): string {
@@ -105,8 +124,8 @@ function clearLongPress() {
   }
 }
 
-async function hideWindow() {
-  await invoke('hide_window')
+async function minimizeWindow() {
+  await invoke('minimize_window')
 }
 
 async function startDragging() {
@@ -179,7 +198,7 @@ function paintKeyboard(board: BoardState, leds: LedFrame) {
       return `
         <div class="key${focused}${empty}${pinned}" data-i="${slot.i}" data-session-id="${slot.sessionId ?? ''}">
           ${pinBadge}
-          <div class="key-led fx-${fx}" style="background:${rgbCss(rgb, br)}"></div>
+          <div class="key-led fx-${fx} led-${slot.status}" style="background:${rgbCss(rgb, br)}"></div>
           <div class="key-content">
             <span class="key-label">A${slot.i + 1}${backend ? ' · ' + backend : ''}</span>
             <span class="key-title">${escapeHtml(title)}</span>
@@ -196,7 +215,7 @@ function paintKeyboard(board: BoardState, leds: LedFrame) {
         <div class="brand" data-tauri-drag-region>Agent Deck</div>
         <div class="title-actions">
           <button class="icon-btn" id="btn-settings" title="设置">⚙</button>
-          <button class="icon-btn" id="btn-hide" title="隐藏到托盘">—</button>
+          <button class="icon-btn" id="btn-hide" title="最小化">—</button>
         </div>
       </div>
       <div class="resize-hint" aria-hidden="true"></div>
@@ -213,7 +232,7 @@ function paintKeyboard(board: BoardState, leds: LedFrame) {
   wireTitlebarDrag()
   document.getElementById('btn-hide')?.addEventListener('click', (ev) => {
     ev.stopPropagation()
-    void hideWindow()
+    void minimizeWindow()
   })
   document.getElementById('btn-settings')?.addEventListener('click', async (ev) => {
     ev.stopPropagation()
@@ -289,7 +308,7 @@ function paintSettings() {
         <div class="brand" data-tauri-drag-region>设置</div>
         <div class="title-actions">
           <button class="icon-btn" id="btn-back" title="返回">←</button>
-          <button class="icon-btn" id="btn-hide" title="隐藏到托盘">—</button>
+          <button class="icon-btn" id="btn-hide" title="最小化">—</button>
         </div>
       </div>
       <div class="settings-body">
@@ -318,7 +337,7 @@ function paintSettings() {
   })
   document.getElementById('btn-hide')?.addEventListener('click', (ev) => {
     ev.stopPropagation()
-    void hideWindow()
+    void minimizeWindow()
   })
   document.getElementById('auto-fill')?.addEventListener('change', async (ev) => {
     const enabled = (ev.target as HTMLInputElement).checked
@@ -423,7 +442,7 @@ function paintBind() {
         <div class="brand" data-tauri-drag-region>绑定 ${slotLabel}</div>
         <div class="title-actions">
           <button class="icon-btn" id="btn-back" title="返回">←</button>
-          <button class="icon-btn" id="btn-hide" title="隐藏到托盘">—</button>
+          <button class="icon-btn" id="btn-hide" title="最小化">—</button>
         </div>
       </div>
       <div class="settings-body">
@@ -456,7 +475,7 @@ function paintBind() {
   })
   document.getElementById('btn-hide')?.addEventListener('click', (ev) => {
     ev.stopPropagation()
-    void hideWindow()
+    void minimizeWindow()
   })
   document.getElementById('btn-unbind')?.addEventListener('click', () => {
     if (bindSlot != null) void unbindSlot(bindSlot)

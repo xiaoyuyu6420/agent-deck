@@ -103,55 +103,78 @@ fn open_zcode_session(
     _session_id: &str,
     info: Option<&SessionInfo>,
 ) -> Result<(), String> {
-    // There are two ways to ask a running ZCode to open a workspace:
+    // How to switch a RUNNING ZCode (3.4.2) to a workspace. Each option was
+    // empirically verified on this machine (2026-07-23), measuring the main
+    // process PID before/after to judge safety:
     //
-    //   (A) deep-link URL  `zcode://workspace/open?path=<p>`
-    //       → handleDeepLink (Rd) → ALWAYS calls confirmExternalWorkspaceOpen
-    //       (bk) → the scary "Only open folders from sources you trust" dialog.
+    //   (A) `open -a ZCode --args --open-workspace <p>`  →  NO effect.
+    //       LaunchServices sees the app is running and just activates it,
+    //       dropping --args entirely. Safe (no new process) but useless.
     //
-    //   (B) spawn the binary with  `ZCode --open-workspace <p>`
-    //       → Electron requestSingleInstanceLock routes this to the running
-    //       instance as a second-instance event → handleSecondInstanceWorkspace
-    //       Request (TT) → wo(argv) → handleOpenWorkspacePath (Ck) →
-    //       webContents.send(OpenWorkspacePath). Ck NEVER calls bk → no trust
-    //       dialog, and it switches the existing window to that project's tab.
+    //   (B) spawn the Mach-O binary / `open -n -a ZCode --args ...`  →
+    //       DANGEROUS. Both create a second ZCode process that calls
+    //       requestSingleInstanceLock. Twice this crashed the user's LIVE
+    //       ZCode session (the running instance quit and a fresh one took
+    //       its place) — contrary to Electron's "loser quits, holder is safe"
+    //       theory. NEVER use any path that starts a second ZCode process.
     //
-    //   IMPORTANT: `open -a ZCode --args --open-workspace <p>` does NOT work —
-    //   LaunchServices sees the app is running and just activates it, dropping
-    //   --args entirely (log shows "reused existing window (app-activate)" with
-    //   no second-instance). Must spawn the Mach-O binary directly so Electron
-    //   sees a second process and fires its second-instance handler.
+    //   (C) `open "zcode://workspace/open?path=<urlencoded p>"`  →  WORKS
+    //       and SAFE. URL dispatch is delivered to the already-running
+    //       instance's handleOpenURL — no second process, no lock fight,
+    //       PID stays constant (verified twice). It DOES show
+    //       confirmExternalWorkspaceOpen ("Open this folder in ZCode?") every
+    //       time — that handler (Fk) is unconditional, has no allowlist and no
+    //       "don't ask again" persistence. The user confirms once per click.
     //
-    // We use (B). task-level (setActiveTaskId) has no external entry point in
-    // ZCode 3.4.2 (TaskNotificationClick is in-process IPC only), so we land
-    // on the correct project tab and let the user pick the session there.
+    //   Reverse-engineering dead ends (all verified, all closed): no
+    //   trusted-workspace allowlist (allowedWorkspaces is an unrelated bot
+    //   config), no desktop plugin loading, web-remote-control is cloud-relay
+    //   only with no "open local path" command, and app.asar is sealed by
+    //   SHA256 integrity + Hardened Runtime signature so it can't be patched.
+    //   So (C) is the only safe way that actually switches the project.
+    //
+    // session_id is accepted but unused: ZCode 3.4.2 exposes no external
+    // entry point to a specific task/session (setActiveTaskId is in-process
+    // IPC only; ACP session/resume hydrates an unrelated headless copy from
+    // disk and cannot drive the desktop window). We land on the right project
+    // and the user picks the session there.
     let workspace = info.and_then(|s| s.workspace_path.as_deref());
     if let Some(path) = workspace {
         if !path.is_empty() && path != "(unknown project)" {
-            let bin = "/Applications/ZCode.app/Contents/MacOS/ZCode";
-            if PathBuf::from(bin).exists() {
-                Command::new(bin)
-                    .args(["--open-workspace", path])
-                    .spawn()
-                    .map_err(|e| format!("spawn ZCode failed: {e}"))?;
-                return Ok(());
-            }
-            // ZCode not in /Applications — fall back to open -a (may show trust
-            // dialog via deep-link, but better than nothing).
+            let encoded = url_encode_path(path);
+            let url = format!("zcode://workspace/open?path={encoded}");
             Command::new("open")
-                .args(["-a", "ZCode", "--args", "--open-workspace", path])
+                .arg(&url)
                 .status()
                 .map_err(|e| format!("open ZCode workspace failed: {e}"))?;
             return Ok(());
         }
     }
-    // No workspace known — just launch/focus ZCode.
+    // No workspace known — just activate/focus the existing ZCode window.
     Command::new("open")
         .arg("-a")
         .arg("ZCode")
         .status()
         .map_err(|e| format!("open ZCode failed: {e}"))?;
     Ok(())
+}
+
+/// Percent-encode a filesystem path for use in a `zcode://` query value.
+/// Encodes everything except the unreserved set [A-Za-z0-9-._~] and '/' (kept
+/// literal so paths stay readable); spaces and non-ASCII (e.g. Chinese) become
+/// %XX / %uXXXX-style UTF-8 percent-encoding. Matches what ZCode's
+/// extractWorkspaceOpenPath expects (it reads URL.searchParams.get("path")).
+fn url_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for &b in path.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 fn open_codex_session(
@@ -282,6 +305,12 @@ fn hide_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn minimize_window(app: AppHandle) -> Result<(), String> {
+    minimize_main_window(&app);
+    Ok(())
+}
+
+#[tauri::command]
 fn show_window(app: AppHandle) -> Result<(), String> {
     show_main_window(&app);
     Ok(())
@@ -302,13 +331,24 @@ fn dispatch_action(state: State<'_, Arc<AppState>>, action: String) -> Result<St
 }
 
 fn show_main_window(app: &AppHandle) {
+    // macOS: a transparent, borderless, always-on-top panel that was hidden
+    // via window.hide() does NOT come back from a Dock click on its own —
+    // Tauri only surfaces RunEvent::Reopen, it won't re-show the window. The
+    // Reopen handler in run() calls us. We must explicitly activate the app
+    // (Regular policy guarantees the Dock can raise it) and then show+focus.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
-        // macOS: dock-less always-on-top panel can need an extra focus nudge.
         #[cfg(target_os = "macos")]
         {
+            // Toggle always-on-top off/on to force the panel back to the top
+            // of the window layer even while other apps are focused.
+            let _ = window.set_always_on_top(false);
             let _ = window.set_always_on_top(true);
         }
     }
@@ -317,6 +357,15 @@ fn show_main_window(app: &AppHandle) {
 fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+    }
+}
+
+/// Minimize the panel to the Dock. Unlike `hide()`, a minimized window is
+/// restored by clicking the Dock icon (native macOS behavior), so the user is
+/// never left with no way to bring it back.
+fn minimize_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.minimize();
     }
 }
 
@@ -340,11 +389,23 @@ pub fn run() {
             get_settings,
             set_auto_fill,
             hide_window,
+            minimize_window,
             show_window,
             start_dragging,
             dispatch_action
         ])
         .setup(move |app| {
+            // macOS: pin the activation policy to Regular at startup so the
+            // app is a first-class Dock citizen. This is what makes clicking
+            // the Dock icon fire RunEvent::Reopen (handled in run()), which is
+            // the only reliable way to surface a window that was hidden via
+            // window.hide(). Without this, a borderless transparent panel can
+            // end up in a state where Dock clicks do nothing.
+            #[cfg(target_os = "macos")]
+            {
+                let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            }
+
             let show_i = MenuItem::with_id(app, "show", "显示悬浮窗", true, None::<&str>)?;
             let hide_i = MenuItem::with_id(app, "hide", "隐藏悬浮窗", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -353,10 +414,16 @@ pub fn run() {
             // Keep tray icon alive for the whole app lifetime.
             // macOS: left-click must NOT open the menu, otherwise Click never
             // fires and the window appears "gone forever" after hide.
-            let tray = TrayIconBuilder::new()
+            // The icon MUST be set explicitly — without it Tauri v2 shows no
+            // status-bar item at all, leaving the user with no way to unhide.
+            let mut builder = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .tooltip("Agent Deck — 左键显示/隐藏，右键菜单")
+                .tooltip("Agent Deck — 左键显示/隐藏，右键菜单");
+            if let Some(icon) = app.default_window_icon() {
+                builder = builder.icon(icon.clone());
+            }
+            let tray = builder
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
                     "hide" => hide_main_window(app),
@@ -397,7 +464,12 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let poll_state = state.clone();
             thread::spawn(move || loop {
-                thread::sleep(Duration::from_millis(500));
+                // 200ms poll. State comes from tool_usage (written in real time
+                // by ZCode as each tool starts/finishes), and a bound key must
+                // reflect a tool kicking off within a beat — 500ms felt laggy
+                // ("several seconds" behind). 200ms is still cheap for local
+                // read-only sqlite (sub-ms per query) and reads as instant.
+                thread::sleep(Duration::from_millis(200));
                 let update = {
                     let mut service = match poll_state.service.lock() {
                         Ok(s) => s,
@@ -416,6 +488,48 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Agent Deck");
+        .build(tauri::generate_context!())
+        .expect("error while building Agent Deck")
+        .run(|app_handle, event| {
+            // macOS: clicking the Dock icon when the window is hidden/minimized
+            // fires RunEvent::Reopen. Bring the panel back so the user always
+            // has a way to surface the window.
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_main_window(app_handle);
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url_encode_path;
+
+    #[test]
+    fn url_encode_keeps_unreserved_and_slash() {
+        // ASCII unreserved set + '/' stay literal.
+        assert_eq!(
+            url_encode_path("/Users/munich/code/proxy-pool_v2.0"),
+            "/Users/munich/code/proxy-pool_v2.0"
+        );
+    }
+
+    #[test]
+    fn url_encode_encodes_space() {
+        assert_eq!(url_encode_path("/a/b c"), "/a/b%20c");
+    }
+
+    #[test]
+    fn url_encode_encodes_chinese_path() {
+        // Chinese in the path (common here: 独立项目) must become UTF-8
+        // percent-encoding, exactly what URLSearchParams on the ZCode side
+        // will decode back to the original string.
+        let encoded = url_encode_path("/Users/munich/Desktop/独立项目/modjing");
+        assert!(encoded.starts_with("/Users/munich/Desktop/"));
+        assert!(!encoded.contains('独'));
+        // 独立项目 in UTF-8 bytes, percent-encoded:
+        assert_eq!(
+            encoded,
+            "/Users/munich/Desktop/%E7%8B%AC%E7%AB%8B%E9%A1%B9%E7%9B%AE/modjing"
+        );
+    }
 }

@@ -198,6 +198,11 @@
   border-radius: 10px;
   pointer-events: none;
   z-index: 0;
+  /* Additive blend over the dark glass keycap → "lit from within" glow
+     rather than a flat color slab. Soften saturation a touch so the pure
+     semantic greens/reds (#00FF4C / #FF0033) lose their neon harshness. */
+  mix-blend-mode: screen;
+  filter: saturate(0.85);
 }
 
 .fx-breathe {
@@ -210,13 +215,30 @@
   animation: blink 0.45s step-start infinite;
 }
 
+/* done: gentle slow pulse so "completed" feels alive, not frozen solid. */
+.led-done {
+  animation: breathe-slow 3s ease-in-out infinite;
+}
+/* error: slow assertive flash to draw the eye without strobing. */
+.led-error {
+  animation: blink-slow 1.4s ease-in-out infinite;
+}
+
 @keyframes breathe {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
 }
+@keyframes breathe-slow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.92; }
+}
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.12; }
+}
+@keyframes blink-slow {
+  0%, 100% { opacity: 0.95; }
+  50% { opacity: 0.35; }
 }
 
 .key-content {
