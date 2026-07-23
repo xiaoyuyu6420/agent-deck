@@ -166,3 +166,38 @@ deep link 已能驱动桌面窗口跳转，无需 RPC。但 `thread/resume {thre
 | Codex 协议漂移 | generate-json-schema 钉版本到 schema/codex/ |
 | app-server 实验性 | fallback `remote-control`，两家都试 |
 | codex 未启动 | adapter 优雅降级，不报错只 log |
+
+## 实时状态（ipc.sock）：e2e 发现与现状
+
+> 本节由 2026-07-23 的端到端实测修正，记录一个重要的协议认知更新。
+
+### 背景
+
+独立 spawn 的 app-server 看不到 GUI 的 live thread 状态（进程内存隔离，`thread/list` 全 `notLoaded`）。为补全 working/waiting，`crates/codex/src/ipc.rs` 的 `IpcStateWatcher` 连 GUI 的 `~/.codex/ipc/ipc.sock`（IpcRouter，4 字节小端长度前缀 + JSON），订阅广播。
+
+### e2e 实测发现（协议认知修正）
+
+探针 `crates/codex/examples/ipc_probe.rs` + python 裸 ipc 监听双通道实测，揭示一个**关键的协议理解错误**：
+
+| 广播 method | 最初理解 | 实测真相（逆向 app.asar 确认） |
+|---|---|---|
+| `thread-stream-state-changed` | turn 状态（working/waiting）广播，payload `{status, threadId}` | ❌ **是对话内容增量同步**（`change.type=patches/snapshot`），且只推给已注册的 stream **follower**（`targetClientIds=getFollowerClientIds`）。作为 `clientType:"extension"` 连入**收不到**它 |
+| `thread-stream-following-changed` | — | ✅ 能收到，payload `{conversationId, following:bool}`，表示 GUI 当前聚焦哪个 thread |
+
+实测：60 秒持续监听，GUI 有操作时**零条** `thread-stream-state-changed`，仅收到 `following-changed`。
+
+### 当前状态
+
+- ✅ **ipc.sock 握手连通**（`initialize` → clientId）。
+- ✅ **app-server RPC 通**（`thread/list` 返回全集，catalog 25 个会话）。
+- ✅ **降级正常**（GUI 无 active turn 时 poll 返回空，不崩溃）。
+- ⚠️ **working/waiting 实时覆盖未生效**：`parse_broadcast` 解析的 `{status, threadId}` 结构与真实 payload（`{conversationId, change:{...}}`）不匹配，且 extension client 非 follower 收不到内容流。
+
+### 待重新设计的路径
+
+要拿到真正的 turn 状态，需重新评估 ipc 接入方式（按可能性排序）：
+1. **注册成 stream follower**：发 follower 注册请求，接收 `thread-stream-state-changed` 的 snapshot，从中解析 `conversationState` 的 active/resumeState 字段。
+2. **轮询 `thread/stream/status` 类请求**（若 IPC 总线有对应 request method）。
+3. **退回 app-server 的 `thread/status/changed` JSON-RPC 通知**：但那是 GUI app-server 的内部通道（stdio），外部 app-server 进程收不到。
+
+`IpcStateWatcher` 的帧编解码（length-prefixed）+ 握手 + 后台线程架构**已验证可用**，仅需修正订阅/解析逻辑——这是后续任务，不在当前范围。当前 codex 会话在 deck 上显示的状态是静态 `notLoaded`（与 ipc 接入前一致，不退化）。
