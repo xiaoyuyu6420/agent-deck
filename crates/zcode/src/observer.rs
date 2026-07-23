@@ -10,6 +10,26 @@ use thiserror::Error;
 
 const STALE_WINDOW_SECS: i64 = 30 * 60;
 
+/// How recent a `tool_usage` row must be to count as "session is active right
+/// now". ZCode does NOT always write back `completed_at` when a tool finishes
+/// (ZCode 3.4.2), leaving zombie rows with `status='running'` and
+/// `completed_at IS NULL` forever. Those stale rows (often tens of minutes
+/// old) would otherwise pin a finished session to Working forever. A 5-minute
+/// window filters them out while still catching any tool that is genuinely
+/// running — real tool calls finish well inside 5 minutes.
+const ACTIVE_WINDOW_SECS: i64 = 5 * 60;
+
+/// How recently a session must have produced ANY tool_usage row (regardless of
+/// status) to count as "still in an active conversation". This is the key to
+/// avoiding flicker: between two tool calls there is a gap where no row has
+/// `status='running' AND completed_at IS NULL`, so the narrower ACTIVE check
+/// flips to Done. But the conversation is plainly not finished — the agent is
+/// just thinking/reading between actions. If any tool_usage landed in the last
+/// few minutes, the session is alive and should stay Working. Tuned wider than
+/// typical inter-tool gaps (seconds) but narrower than how long a user leaves a
+/// finished session before starting a new one.
+const RECENT_ACTIVITY_SECS: i64 = 3 * 60;
+
 #[derive(Debug, Error)]
 pub enum ObserverError {
     #[error("sqlite: {0}")]
@@ -101,6 +121,27 @@ impl SqliteObserver {
         Ok(snapshots)
     }
 
+    /// Latest state of specific tasks by id — no status filter, no LIMIT.
+    /// Keeps manually pinned sessions live even when they fall outside the
+    /// `poll()` recent-20 window. Ids not in this backend's table are simply
+    /// not returned (caller may pass ids owned by other backends).
+    pub fn poll_pinned_once(
+        &mut self,
+        ids: &[String],
+    ) -> Result<Vec<SessionSnapshot>, ObserverError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        if self.conn.is_none() {
+            // Lazy open so pinned refresh works even if open() was skipped.
+            let _ = self.open();
+        }
+        if self.conn.is_none() {
+            return Ok(vec![]);
+        }
+        self.query_tasks_by_ids(ids)
+    }
+
     /// Full catalog for bind picker: all non-deleted/non-archived tasks across
     /// every project, including older history beyond the board poll window.
     pub fn catalog_once(&mut self) -> Result<Vec<SessionSnapshot>, ObserverError> {
@@ -153,7 +194,21 @@ SELECT
       AND tu.completed_at IS NULL
     ORDER BY tu.started_at DESC
     LIMIT 1
-  ) AS detail
+  ) AS detail,
+  CASE WHEN EXISTS(
+    SELECT 1 FROM cli.tool_usage tu
+    WHERE tu.session_id = t.task_id
+      AND tu.status = 'running'
+      AND tu.completed_at IS NULL
+      AND tu.started_at > (strftime('%s','now') - {ACTIVE_WINDOW_SECS}) * 1000
+  ) OR EXISTS(
+    -- Conversation is alive even between tool calls: the agent thinks/reads
+    -- in the gap, so no row is "running" right now, yet activity landed
+    -- moments ago. Keep it Working until the session truly goes quiet.
+    SELECT 1 FROM cli.tool_usage tu
+    WHERE tu.session_id = t.task_id
+      AND tu.started_at > (strftime('%s','now') - {RECENT_ACTIVITY_SECS}) * 1000
+  ) THEN 1 ELSE 0 END AS active
 FROM tasks t
 WHERE {status_predicate}
   AND t.deleted = 0
@@ -173,6 +228,91 @@ LIMIT {limit}
                 updated_at: row.get::<_, i64>(4).unwrap_or(0).max(0) as u64,
                 waiting: row.get(5)?,
                 detail: row.get(6)?,
+                active: row.get::<_, i64>(7)? != 0,
+            })
+        })?;
+
+        let mut snapshots = Vec::new();
+        for row in rows {
+            let row = row?;
+            let snap = map_zcode_row(&row);
+            if self.is_excluded(&snap) {
+                continue;
+            }
+            snapshots.push(snap);
+        }
+        Ok(snapshots)
+    }
+
+    /// Same projection as `query_tasks`, but selects by task_id and has no
+    /// LIMIT / status filter. Used to refresh pinned sessions regardless of
+    /// their age or status.
+    fn query_tasks_by_ids(&self, ids: &[String]) -> Result<Vec<SessionSnapshot>, ObserverError> {
+        let conn = self
+            .conn
+            .as_ref()
+            .expect("query_tasks_by_ids requires an open connection");
+        // Build `IN (?, ?, …)` with one placeholder per id (parameterized →
+        // no injection even though ids originate from the local pins file).
+        let placeholders: Vec<&str> = std::iter::repeat("?").take(ids.len()).collect();
+        let in_clause = placeholders.join(", ");
+        let sql = format!(
+            r#"
+SELECT
+  t.task_id,
+  t.title,
+  t.task_status,
+  t.workspace_path,
+  t.updated_at,
+  CASE WHEN EXISTS(
+    SELECT 1 FROM cli.tool_usage tu
+    WHERE tu.session_id = t.task_id
+      AND tu.approval_status = 'requested'
+      AND tu.status = 'running'
+      AND tu.completed_at IS NULL
+      AND tu.started_at > (strftime('%s','now') - {STALE_WINDOW_SECS}) * 1000
+  ) THEN 1 ELSE 0 END AS waiting,
+  (
+    SELECT tu.tool_name || ': ' || COALESCE(tu.side_effect_scope, '')
+    FROM cli.tool_usage tu
+    WHERE tu.session_id = t.task_id
+      AND tu.approval_status = 'requested'
+      AND tu.status = 'running'
+      AND tu.completed_at IS NULL
+    ORDER BY tu.started_at DESC
+    LIMIT 1
+  ) AS detail,
+  CASE WHEN EXISTS(
+    SELECT 1 FROM cli.tool_usage tu
+    WHERE tu.session_id = t.task_id
+      AND tu.status = 'running'
+      AND tu.completed_at IS NULL
+      AND tu.started_at > (strftime('%s','now') - {ACTIVE_WINDOW_SECS}) * 1000
+  ) OR EXISTS(
+    SELECT 1 FROM cli.tool_usage tu
+    WHERE tu.session_id = t.task_id
+      AND tu.started_at > (strftime('%s','now') - {RECENT_ACTIVITY_SECS}) * 1000
+  ) THEN 1 ELSE 0 END AS active
+FROM tasks t
+WHERE t.task_id IN ({in_clause})
+  AND t.deleted = 0
+  AND t.archived = 0
+"#
+        );
+
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(ZcodeRow {
+                task_id: row.get(0)?,
+                title: row.get(1)?,
+                task_status: row.get(2)?,
+                workspace_path: row.get(3)?,
+                updated_at: row.get::<_, i64>(4).unwrap_or(0).max(0) as u64,
+                waiting: row.get(5)?,
+                detail: row.get(6)?,
+                active: row.get::<_, i64>(7)? != 0,
             })
         })?;
 

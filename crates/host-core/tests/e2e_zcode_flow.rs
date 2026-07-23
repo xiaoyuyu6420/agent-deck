@@ -249,6 +249,12 @@ fn full_demo_working_waiting_accept_done() {
     host.tick().unwrap();
     assert_eq!(board_status(&host, "sess_flow"), Some(DeckStatus::Working));
 
+    // Started 4+ minutes ago so that once completed it falls OUTSIDE the
+    // active window (RECENT_ACTIVITY_SECS = 3min). Otherwise the completed
+    // tool's started_at is "recent" and active stays true → Working, never
+    // Done. This models a session whose last tool call genuinely finished a
+    // while ago (truly idle), not one mid-conversation.
+    let tool_started = now_ms().saturating_sub(4 * 60 * 1000);
     fx.insert_tool(
         "tu_flow",
         "sess_flow",
@@ -256,7 +262,7 @@ fn full_demo_working_waiting_accept_done() {
         "git push",
         "requested",
         "running",
-        now_ms(),
+        tool_started,
         None,
     );
     host.tick().unwrap();
