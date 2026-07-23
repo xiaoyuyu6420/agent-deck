@@ -41,6 +41,8 @@ fn default_config() -> HostConfig {
         slot_count: 8,
         enable_codex: true,
         codex_cli_path: None,
+        enable_workbuddy: true,
+        workbuddy_projects_dir: None,
     }
 }
 
@@ -94,6 +96,11 @@ fn open_slot_session(
     match backend {
         BackendId::Zcode => open_zcode_session(&app, &session_id, info.as_ref())?,
         BackendId::Codex => open_codex_session(&app, &session_id, info.as_ref())?,
+        // Observation-only phase: WorkBuddy sessions are listed and bound, but
+        // deep-link open is not wired yet (see docs/workbuddy-integration.md).
+        BackendId::Workbuddy => {
+            return Err("WorkBuddy 跳转暂未实现(仅观察)".into());
+        }
     }
     Ok(())
 }

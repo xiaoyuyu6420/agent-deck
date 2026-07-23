@@ -17,6 +17,7 @@
 │  │  Observer 层（只读、被动）                              │ │
 │  │  - ZCodeObserver: 双 sqlite + 文件 mtime                │ │
 │  │  - CodexObserver: app-server thread/status/changed      │ │
+│  │  - WorkBuddyObserver: ~/.workbuddy jsonl 事件流扫描     │ │
 │  │  → 统一 SessionSnapshot 事件                            │ │
 │  ├────────────────────────────────────────────────────────┤ │
 │  │  Board 层                                              │ │

@@ -180,6 +180,8 @@ CREATE TABLE tool_usage (
             slot_count: 5,
             enable_codex: false,
             codex_cli_path: None,
+            enable_workbuddy: false,
+            workbuddy_projects_dir: None,
         })
         .unwrap()
     }
@@ -311,6 +313,8 @@ fn exclude_workspace_hides_self() {
         slot_count: 5,
         enable_codex: false,
         codex_cli_path: None,
+        enable_workbuddy: false,
+        workbuddy_projects_dir: None,
     })
     .unwrap();
     host.tick().unwrap();

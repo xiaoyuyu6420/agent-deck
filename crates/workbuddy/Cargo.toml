@@ -1,21 +1,16 @@
 [package]
-name = "agent-deck-host-core"
+name = "agent-deck-workbuddy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Host orchestration: zcode observer + session board"
+description = "WorkBuddy backend: read-only jsonl session observer + mapper"
 
 [dependencies]
 agent-deck-protocol = { workspace = true }
-agent-deck-board = { workspace = true }
-agent-deck-zcode = { workspace = true }
-agent-deck-codex = { workspace = true }
-agent-deck-workbuddy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
-rusqlite = { workspace = true }
 tempfile = { workspace = true }

@@ -13,6 +13,7 @@ pub const WORKING_LONG_MS: u64 = 5 * 60 * 1000;
 pub enum BackendId {
     Zcode,
     Codex,
+    Workbuddy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

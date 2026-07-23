@@ -28,6 +28,8 @@ fn real_config(slot_count: usize) -> HostConfig {
         slot_count,
         enable_codex: false,
         codex_cli_path: None,
+        enable_workbuddy: false,
+        workbuddy_projects_dir: None,
     }
 }
 

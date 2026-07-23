@@ -108,6 +108,24 @@ impl BackendObserver for agent_deck_codex::CodexObserver {
     }
 }
 
+impl BackendObserver for agent_deck_workbuddy::JsonlObserver {
+    fn id(&self) -> BackendId {
+        BackendId::Workbuddy
+    }
+
+    fn poll(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
+        Ok(self.poll_once()?)
+    }
+
+    fn list_catalog(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
+        Ok(self.catalog_once()?)
+    }
+
+    fn poll_pinned(&mut self, ids: &[String]) -> anyhow::Result<Vec<SessionSnapshot>> {
+        Ok(self.poll_pinned_once(ids)?)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct HostConfig {
     pub tasks_db_path: PathBuf,
@@ -119,6 +137,11 @@ pub struct HostConfig {
     pub enable_codex: bool,
     /// Override path to the codex binary; None → auto-detect.
     pub codex_cli_path: Option<PathBuf>,
+    /// When true, also register a WorkBuddy jsonl observer (graceful no-op if
+    /// the ~/.workbuddy/projects tree is absent).
+    pub enable_workbuddy: bool,
+    /// Override path to the WorkBuddy projects tree; None → ~/.workbuddy/projects.
+    pub workbuddy_projects_dir: Option<PathBuf>,
 }
 
 impl Default for HostConfig {
@@ -134,6 +157,8 @@ impl Default for HostConfig {
             slot_count: 8,
             enable_codex: true,
             codex_cli_path: None,
+            enable_workbuddy: true,
+            workbuddy_projects_dir: None,
         }
     }
 }
@@ -148,10 +173,10 @@ impl HostCore {
         let mut observers: Vec<Box<dyn BackendObserver>> = Vec::new();
 
         let mut zcode = SqliteObserver::new(SqliteObserverOptions {
-            tasks_db_path: config.tasks_db_path,
-            tool_db_path: config.tool_db_path,
-            exclude_workspaces: config.exclude_workspaces,
-            exclude_task_ids: config.exclude_task_ids,
+            tasks_db_path: config.tasks_db_path.clone(),
+            tool_db_path: config.tool_db_path.clone(),
+            exclude_workspaces: config.exclude_workspaces.clone(),
+            exclude_task_ids: config.exclude_task_ids.clone(),
             fail_on_missing: false,
         });
         // Missing zcode DBs is fine — observer stays empty.
@@ -167,6 +192,28 @@ impl HostCore {
             // open is best-effort; poll will also try reconnect.
             let _ = codex.open();
             observers.push(Box::new(codex));
+        }
+
+        if config.enable_workbuddy {
+            let workbuddy_projects_dir = config
+                .workbuddy_projects_dir
+                .clone()
+                .unwrap_or_else(|| {
+                    let home = std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    home.join(".workbuddy/projects")
+                });
+            let mut workbuddy =
+                agent_deck_workbuddy::JsonlObserver::new(agent_deck_workbuddy::JsonlObserverOptions {
+                    projects_dir: workbuddy_projects_dir,
+                    exclude_workspaces: config.exclude_workspaces.clone(),
+                    exclude_task_ids: config.exclude_task_ids.clone(),
+                    ..Default::default()
+                });
+            // Missing tree is fine — observer stays empty.
+            let _ = workbuddy.open();
+            observers.push(Box::new(workbuddy));
         }
 
         let board = SessionBoard::new(config.slot_count);

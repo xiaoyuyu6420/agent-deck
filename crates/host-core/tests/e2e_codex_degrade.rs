@@ -78,6 +78,8 @@ fn missing_codex_cli_does_not_break_zcode() {
             slot_count: 5,
             enable_codex: true,
             codex_cli_path: Some(dir.path().join("no-such-codex")),
+            enable_workbuddy: false,
+            workbuddy_projects_dir: None,
         },
         None,
     )

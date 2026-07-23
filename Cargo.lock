@@ -50,6 +50,7 @@ dependencies = [
  "agent-deck-board",
  "agent-deck-codex",
  "agent-deck-protocol",
+ "agent-deck-workbuddy",
  "agent-deck-zcode",
  "anyhow",
  "rusqlite",
@@ -65,6 +66,18 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "agent-deck-workbuddy"
+version = "0.1.0"
+dependencies = [
+ "agent-deck-protocol",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

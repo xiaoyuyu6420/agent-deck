@@ -4,7 +4,7 @@ import './style.css'
 
 type DeckStatus = 'off' | 'idle' | 'working' | 'waiting' | 'done' | 'error'
 type LedFx = 'solid' | 'breathe' | 'blink_slow' | 'blink_fast'
-type BackendId = 'zcode' | 'codex'
+type BackendId = 'zcode' | 'codex' | 'workbuddy'
 
 interface SlotBinding {
   i: number
@@ -62,6 +62,7 @@ const STATUS_LABEL: Record<DeckStatus, string> = {
 const BACKEND_LABEL: Record<BackendId, string> = {
   zcode: 'ZCode',
   codex: 'Codex',
+  workbuddy: 'WorkBuddy',
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -351,7 +352,7 @@ function paintBind() {
   let body = ''
 
   if (bindStep === 'backend') {
-    const backends: BackendId[] = ['zcode', 'codex']
+    const backends: BackendId[] = ['zcode', 'codex', 'workbuddy']
     body = `
       <div class="bind-step">1. 选择工具 · 共 ${sessionsCache.length} 条历史</div>
       <div class="bind-list">

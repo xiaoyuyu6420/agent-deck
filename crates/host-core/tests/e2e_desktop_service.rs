@@ -64,6 +64,8 @@ fn service_with(tasks: PathBuf, tool: PathBuf) -> DesktopService {
             slot_count: 5,
             enable_codex: false,
             codex_cli_path: None,
+            enable_workbuddy: false,
+            workbuddy_projects_dir: None,
         },
         None,
     )
@@ -181,6 +183,8 @@ fn pin_slot_marks_board_and_persists() {
             slot_count: 5,
             enable_codex: false,
             codex_cli_path: None,
+            enable_workbuddy: false,
+            workbuddy_projects_dir: None,
         },
         Some(pins_path.clone()),
     )
@@ -203,6 +207,8 @@ fn pin_slot_marks_board_and_persists() {
             slot_count: 5,
             enable_codex: false,
             codex_cli_path: None,
+            enable_workbuddy: false,
+            workbuddy_projects_dir: None,
         },
         Some(pins_path),
     )

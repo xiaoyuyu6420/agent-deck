@@ -5,6 +5,7 @@ members = [
   "crates/board",
   "crates/zcode",
   "crates/codex",
+  "crates/workbuddy",
   "crates/host-core",
   "apps/desktop/src-tauri",
 ]
@@ -20,6 +21,7 @@ agent-deck-protocol = { path = "crates/protocol" }
 agent-deck-board = { path = "crates/board" }
 agent-deck-zcode = { path = "crates/zcode" }
 agent-deck-codex = { path = "crates/codex" }
+agent-deck-workbuddy = { path = "crates/workbuddy" }
 agent-deck-host-core = { path = "crates/host-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

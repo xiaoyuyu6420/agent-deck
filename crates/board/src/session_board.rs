@@ -98,6 +98,7 @@ impl SessionBoard {
             match backend {
                 BackendId::Zcode => "zcode",
                 BackendId::Codex => "codex",
+                BackendId::Workbuddy => "workbuddy",
             }
         )
     }
@@ -154,6 +155,7 @@ impl SessionBoard {
         let prefix = match backend {
             BackendId::Zcode => "zcode:",
             BackendId::Codex => "codex:",
+            BackendId::Workbuddy => "workbuddy:",
         };
         // Preserve manually pinned historical sessions even if they fall outside
         // the board poll window (LIMIT 20 / Done TTL / idle filter).
