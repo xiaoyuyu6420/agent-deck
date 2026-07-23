@@ -2,9 +2,13 @@
 
 ## 定位
 
-WorkBuddy（腾讯 CodeBuddy 桌面端）是 Agent Deck 的第三个 backend。本机实测确认：WorkBuddy 桌面端内部运行的是 `codebuddy` CLI（v2.106.4），每个 task 对应一个 `session-id`，桌面端自己就用 `codebuddy --serve --session-id <id> --port <n>` 的方式管理多个并发 task。
+WorkBuddy 是 Agent Deck 的第三个 backend。WorkBuddy 是腾讯出品的一个**独立**桌面产品（`/Applications/WorkBuddy.app`，bundle id `com.workbuddy.workbuddy`，v5.2.6，Electron）——它**不是** CodeBuddy 桌面端（两者是不同产品）。WorkBuddy 内部**捆绑了 `codebuddy` CLI**（位于 `WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy`）作为它的任务执行引擎：每个 task 对应一个 `session-id`，WorkBuddy 用 `codebuddy --serve --session-id <id> --port <n>` 的方式管理多个并发 task。
+
+> 历史误记纠正（2026-07-23）：早期文档把 WorkBuddy 写成"腾讯 CodeBuddy 桌面端"，这是不准确的。WorkBuddy 与 CodeBuddy 是两个不同的产品；WorkBuddy 只是内置了 codebuddy CLI 引擎。
 
 **当前接入范围（观察阶段，2026-07-23）**：只读观察——把 WorkBuddy 的 task 列表渲染到键盘上，支持 bind/pin。**跳转和操控未实现**（见下文"未实现的能力"）。
+
+**e2e 实测（2026-07-23，WorkBuddy.app 运行中）**：观察通道完全可用。探针（`crates/workbuddy/examples/probe.rs`）读到 89 个会话文件，poll_once 返回 20 个（含 1 个 Working），catalog_once 返回 89 个（含 9 个 Working），状态映射（Working/Done）正确。
 
 ## 已验证的事实（本机 2026-07-23）
 
