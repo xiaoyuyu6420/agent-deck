@@ -329,6 +329,8 @@ mod tests {
                     waiting_since: None,
                     updated_at: 100,
                     workspace_path: None,
+                project_category: None,
+                project_label: None,
                 },
                 SessionSnapshot {
                     backend: BackendId::Zcode,
@@ -340,6 +342,8 @@ mod tests {
                     waiting_since: None,
                     updated_at: 200,
                     workspace_path: None,
+                project_category: None,
+                project_label: None,
                 },
             ],
             1000,
@@ -374,6 +378,8 @@ mod tests {
                 waiting_since: None,
                 updated_at: 1000,
                 workspace_path: None,
+                project_category: None,
+                project_label: None,
             }],
             1000,
         );

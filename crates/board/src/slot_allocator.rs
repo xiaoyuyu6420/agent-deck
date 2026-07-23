@@ -124,6 +124,8 @@ mod tests {
                 waiting_since: None,
                 updated_at,
                 workspace_path: None,
+                project_category: None,
+                project_label: None,
             },
             urgency: if status == DeckStatus::Waiting {
                 0.5

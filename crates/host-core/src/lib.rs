@@ -2,7 +2,10 @@
 //! Ported from packages/host/src/main.ts (core loop only)
 
 use agent_deck_board::SessionBoard;
-use agent_deck_protocol::{BackendId, BoardState, DeckStatus, LedFrame, SessionSnapshot};
+use agent_deck_protocol::{
+    BackendId, BoardState, DeckStatus, LedFrame, ProjectCategory, SessionSnapshot, DONE_TTL_MS,
+    DONE_TTL_UNOPENED_MS,
+};
 use agent_deck_zcode::{SqliteObserver, SqliteObserverOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,6 +26,10 @@ pub struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub updated_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_category: Option<ProjectCategory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_label: Option<String>,
 }
 
 impl From<&SessionSnapshot> for SessionInfo {
@@ -35,17 +42,107 @@ impl From<&SessionSnapshot> for SessionInfo {
             workspace_path: s.workspace_path.clone(),
             detail: s.detail.clone(),
             updated_at: s.updated_at,
+            project_category: s.project_category,
+            project_label: s.project_label.clone(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckSettings {
     /// When true, unbound slots auto-fill by priority. When false (default),
     /// only manually pinned sessions show — empty keys stay Off.
     #[serde(default)]
     pub auto_fill: bool,
+    /// After the user opens a Done key from Agent Deck, keep green this long.
+    #[serde(default = "default_done_ttl_after_open_ms")]
+    pub done_ttl_after_open_ms: u64,
+    /// Unopened Done keys stay green until this max age, then force Idle.
+    #[serde(default = "default_done_ttl_unopened_ms")]
+    pub done_ttl_unopened_ms: u64,
+}
+
+impl Default for DeckSettings {
+    fn default() -> Self {
+        Self {
+            auto_fill: false,
+            done_ttl_after_open_ms: default_done_ttl_after_open_ms(),
+            done_ttl_unopened_ms: default_done_ttl_unopened_ms(),
+        }
+    }
+}
+
+fn default_done_ttl_after_open_ms() -> u64 {
+    DONE_TTL_MS
+}
+
+fn default_done_ttl_unopened_ms() -> u64 {
+    DONE_TTL_UNOPENED_MS
+}
+
+/// Open-aware Done → Idle decay for WorkBuddy (and future backends that opt in).
+///
+/// - If the user opened the key **after** this Done cycle (`opened_at >= done_since`),
+///   the short `after_open_ms` TTL starts at open time.
+/// - Otherwise keep Done until `unopened_ms` from `done_since`, then force Idle.
+/// - Non-WorkBuddy / non-Done snapshots are returned unchanged.
+pub fn decay_done_status(
+    snap: &SessionSnapshot,
+    opened_at: Option<u64>,
+    now: u64,
+    after_open_ms: u64,
+    unopened_ms: u64,
+) -> DeckStatus {
+    if snap.backend != BackendId::Workbuddy || snap.status != DeckStatus::Done {
+        return snap.status;
+    }
+    let done_since = snap.updated_at;
+    if let Some(opened) = opened_at {
+        if opened >= done_since {
+            return if now.saturating_sub(opened) > after_open_ms {
+                DeckStatus::Idle
+            } else {
+                DeckStatus::Done
+            };
+        }
+    }
+    if now.saturating_sub(done_since) > unopened_ms {
+        DeckStatus::Idle
+    } else {
+        DeckStatus::Done
+    }
+}
+
+fn opened_key(backend: BackendId, session_id: &str) -> String {
+    let prefix = match backend {
+        BackendId::Zcode => "zcode",
+        BackendId::Codex => "codex",
+        BackendId::Workbuddy => "workbuddy",
+    };
+    format!("{prefix}:{session_id}")
+}
+
+fn apply_done_decay(
+    snaps: Vec<SessionSnapshot>,
+    opened_at: &HashMap<String, u64>,
+    now: u64,
+    after_open_ms: u64,
+    unopened_ms: u64,
+) -> Vec<SessionSnapshot> {
+    snaps
+        .into_iter()
+        .map(|mut snap| {
+            let opened = opened_at
+                .get(&opened_key(snap.backend, &snap.session_id))
+                .copied();
+            let next = decay_done_status(&snap, opened, now, after_open_ms, unopened_ms);
+            if next != snap.status {
+                snap.status = next;
+            }
+            snap
+        })
+        .collect()
 }
 
 /// One backend's session observer (zcode / codex / future).
@@ -166,6 +263,12 @@ impl Default for HostConfig {
 pub struct HostCore {
     pub board: SessionBoard,
     observers: Vec<Box<dyn BackendObserver>>,
+    /// In-memory "user opened this session from Agent Deck" timestamps.
+    /// Keyed as `backend:session_id`. Not persisted across restarts.
+    opened_at: HashMap<String, u64>,
+    /// Done decay windows (from DeckSettings). Applied only to WorkBuddy Done.
+    done_ttl_after_open_ms: u64,
+    done_ttl_unopened_ms: u64,
 }
 
 impl HostCore {
@@ -217,7 +320,13 @@ impl HostCore {
         }
 
         let board = SessionBoard::new(config.slot_count);
-        Ok(Self { board, observers })
+        Ok(Self {
+            board,
+            observers,
+            opened_at: HashMap::new(),
+            done_ttl_after_open_ms: DONE_TTL_MS,
+            done_ttl_unopened_ms: DONE_TTL_UNOPENED_MS,
+        })
     }
 
     /// Construct with an explicit observer list (tests inject fixtures).
@@ -225,7 +334,27 @@ impl HostCore {
         Self {
             board: SessionBoard::new(slot_count),
             observers,
+            opened_at: HashMap::new(),
+            done_ttl_after_open_ms: DONE_TTL_MS,
+            done_ttl_unopened_ms: DONE_TTL_UNOPENED_MS,
         }
+    }
+
+    /// Update Done decay windows (from settings). Takes effect on next tick.
+    pub fn set_done_ttl(&mut self, after_open_ms: u64, unopened_ms: u64) {
+        self.done_ttl_after_open_ms = after_open_ms;
+        self.done_ttl_unopened_ms = unopened_ms;
+    }
+
+    /// Record that the user opened this session from Agent Deck (key click).
+    /// In-memory only; does not require the backend app open to succeed.
+    pub fn mark_opened(&mut self, backend: BackendId, session_id: &str) {
+        self.mark_opened_at(backend, session_id, now_ms());
+    }
+
+    pub fn mark_opened_at(&mut self, backend: BackendId, session_id: &str, now: u64) {
+        self.opened_at
+            .insert(opened_key(backend, session_id), now);
     }
 
     /// Poll all backends once and recompute board using wall clock.
@@ -238,11 +367,17 @@ impl HostCore {
         // Snapshot the current pinned ids up-front (before any recompute) so we
         // can refresh them outside the active poll window.
         let pinned_ids: Vec<String> = self.board.pins().values().cloned().collect();
+        // Copy decay inputs so we don't fight the mutable borrow of observers.
+        let opened_at = self.opened_at.clone();
+        let after_open_ms = self.done_ttl_after_open_ms;
+        let unopened_ms = self.done_ttl_unopened_ms;
 
         for obs in &mut self.observers {
             // One backend failing must not block the others.
             match obs.poll() {
                 Ok(snaps) => {
+                    let snaps =
+                        apply_done_decay(snaps, &opened_at, now, after_open_ms, unopened_ms);
                     self.board.replace_backend_sessions(obs.id(), snaps, now);
                 }
                 Err(_) => continue,
@@ -255,6 +390,13 @@ impl HostCore {
             // live instead of frozen at its bind-time snapshot.
             if !pinned_ids.is_empty() {
                 if let Ok(pinned_snaps) = obs.poll_pinned(&pinned_ids) {
+                    let pinned_snaps = apply_done_decay(
+                        pinned_snaps,
+                        &opened_at,
+                        now,
+                        after_open_ms,
+                        unopened_ms,
+                    );
                     self.board.upsert_sessions(pinned_snaps, now);
                 }
             }
@@ -358,7 +500,17 @@ impl HostCore {
                         }
                     }
                     if let Some(snap) = found {
-                        self.board.upsert_session(snap, now_ms());
+                        let now = now_ms();
+                        let snaps = apply_done_decay(
+                            vec![snap],
+                            &self.opened_at,
+                            now,
+                            self.done_ttl_after_open_ms,
+                            self.done_ttl_unopened_ms,
+                        );
+                        if let Some(snap) = snaps.into_iter().next() {
+                            self.board.upsert_session(snap, now);
+                        }
                     }
                 }
                 self.set_pin(i, Some(id));
@@ -425,6 +577,10 @@ impl DesktopService {
             .map(|p| load_settings(p))
             .unwrap_or_default();
         host.set_auto_fill(settings.auto_fill);
+        host.set_done_ttl(
+            settings.done_ttl_after_open_ms,
+            settings.done_ttl_unopened_ms,
+        );
 
         if let Some(ref path) = pins_path {
             let pins = load_pins(path);
@@ -486,6 +642,16 @@ impl DesktopService {
         self.host.set_focus_at(i, now);
     }
 
+    /// Record that the user opened this session from Agent Deck (key click).
+    /// Starts the short Done TTL for WorkBuddy when the session is Done.
+    pub fn mark_opened(&mut self, backend: BackendId, session_id: &str) {
+        self.host.mark_opened(backend, session_id);
+    }
+
+    pub fn mark_opened_at(&mut self, backend: BackendId, session_id: &str, now: u64) {
+        self.host.mark_opened_at(backend, session_id, now);
+    }
+
     /// Pin/unpin a session on a slot (manual bind). Historical catalog sessions are
     /// upserted into the board so they survive the next poll window.
     pub fn pin_slot(&mut self, i: usize, session_id: Option<String>) {
@@ -507,6 +673,16 @@ impl DesktopService {
     pub fn set_auto_fill(&mut self, enabled: bool) {
         self.settings.auto_fill = enabled;
         self.host.set_auto_fill(enabled);
+        if let Some(ref path) = self.settings_path {
+            let _ = save_settings(path, &self.settings);
+        }
+    }
+
+    /// Update open-aware Done TTLs and persist settings.
+    pub fn set_done_ttl(&mut self, after_open_ms: u64, unopened_ms: u64) {
+        self.settings.done_ttl_after_open_ms = after_open_ms;
+        self.settings.done_ttl_unopened_ms = unopened_ms;
+        self.host.set_done_ttl(after_open_ms, unopened_ms);
         if let Some(ref path) = self.settings_path {
             let _ = save_settings(path, &self.settings);
         }
@@ -611,6 +787,8 @@ pub fn demo_board_state() -> (LedFrame, BoardState) {
                 waiting_since: Some(now.saturating_sub(30_000)),
                 updated_at: now,
                 workspace_path: Some("/demo".into()),
+                project_category: None,
+                project_label: None,
             },
             SessionSnapshot {
                 backend: BackendId::Zcode,
@@ -622,6 +800,8 @@ pub fn demo_board_state() -> (LedFrame, BoardState) {
                 waiting_since: None,
                 updated_at: now,
                 workspace_path: Some("/demo".into()),
+                project_category: None,
+                project_label: None,
             },
         ],
         now,
@@ -630,4 +810,141 @@ pub fn demo_board_state() -> (LedFrame, BoardState) {
         board.led_frame().cloned().unwrap(),
         board.board_state().cloned().unwrap(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wb_done(session_id: &str, done_since: u64) -> SessionSnapshot {
+        SessionSnapshot {
+            backend: BackendId::Workbuddy,
+            session_id: session_id.into(),
+            title: "t".into(),
+            status: DeckStatus::Done,
+            risk: None,
+            detail: None,
+            waiting_since: None,
+            updated_at: done_since,
+            workspace_path: None,
+                project_category: None,
+                project_label: None,
+        }
+    }
+
+    fn zcode_done(session_id: &str, done_since: u64) -> SessionSnapshot {
+        SessionSnapshot {
+            backend: BackendId::Zcode,
+            session_id: session_id.into(),
+            title: "t".into(),
+            status: DeckStatus::Done,
+            risk: None,
+            detail: None,
+            waiting_since: None,
+            updated_at: done_since,
+            workspace_path: None,
+                project_category: None,
+                project_label: None,
+        }
+    }
+
+    #[test]
+    fn unopened_stays_done_within_long_ttl() {
+        let done_since = 1_000_000;
+        let now = done_since + 60 * 60 * 1000; // 1h later
+        let snap = wb_done("s1", done_since);
+        assert_eq!(
+            decay_done_status(&snap, None, now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
+            DeckStatus::Done
+        );
+    }
+
+    #[test]
+    fn unopened_force_idle_after_long_ttl() {
+        let done_since = 1_000_000;
+        let now = done_since + DONE_TTL_UNOPENED_MS + 1;
+        let snap = wb_done("s1", done_since);
+        assert_eq!(
+            decay_done_status(&snap, None, now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
+            DeckStatus::Idle
+        );
+    }
+
+    #[test]
+    fn after_open_stays_done_inside_short_ttl() {
+        let done_since = 1_000_000;
+        let opened = done_since + 10_000;
+        let now = opened + DONE_TTL_MS - 1;
+        let snap = wb_done("s1", done_since);
+        assert_eq!(
+            decay_done_status(
+                &snap,
+                Some(opened),
+                now,
+                DONE_TTL_MS,
+                DONE_TTL_UNOPENED_MS
+            ),
+            DeckStatus::Done
+        );
+    }
+
+    #[test]
+    fn after_open_idle_past_short_ttl() {
+        let done_since = 1_000_000;
+        let opened = done_since + 10_000;
+        let now = opened + DONE_TTL_MS + 1;
+        let snap = wb_done("s1", done_since);
+        assert_eq!(
+            decay_done_status(
+                &snap,
+                Some(opened),
+                now,
+                DONE_TTL_MS,
+                DONE_TTL_UNOPENED_MS
+            ),
+            DeckStatus::Idle
+        );
+    }
+
+    #[test]
+    fn open_before_done_counts_as_unopened() {
+        // User opened while Working; Done arrives later → need a fresh open.
+        let done_since = 1_000_000;
+        let opened = done_since - 5_000;
+        let now = done_since + DONE_TTL_MS + 60_000; // past short TTL from open
+        let snap = wb_done("s1", done_since);
+        assert_eq!(
+            decay_done_status(
+                &snap,
+                Some(opened),
+                now,
+                DONE_TTL_MS,
+                DONE_TTL_UNOPENED_MS
+            ),
+            DeckStatus::Done
+        );
+    }
+
+    #[test]
+    fn non_workbuddy_done_untouched() {
+        let done_since = 1_000_000;
+        let now = done_since + DONE_TTL_UNOPENED_MS + 1;
+        let snap = zcode_done("s1", done_since);
+        assert_eq!(
+            decay_done_status(&snap, None, now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
+            DeckStatus::Done
+        );
+    }
+
+    #[test]
+    fn settings_defaults_fill_missing_ttl_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Old settings file only had autoFill.
+        fs::write(&path, r#"{"autoFill":true}"#).unwrap();
+        let s = load_settings(&path);
+        assert!(s.auto_fill);
+        assert_eq!(s.done_ttl_after_open_ms, DONE_TTL_MS);
+        assert_eq!(s.done_ttl_unopened_ms, DONE_TTL_UNOPENED_MS);
+    }
 }

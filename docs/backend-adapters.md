@@ -79,7 +79,7 @@ mapper 必须是**纯函数**（无 IO、无全局状态），单测覆盖所有
 | **子进程 RPC + 事件通道** | codex (app-server + ipc.sock) | Agent 有 CLI daemon / 桌面 app，需拿 live 内存状态 | 高 | 事件驱动(准实时) |
 
 **关键决策点**：能否拿到**实时 working/waiting 状态**？
-- 文件/DB 模式：靠轮询 + 时间窗推断（workbuddy 用 5 分钟窗区分 idle/done；zcode 靠 tool_usage 的实时落盘）。
+- 文件/DB 模式：靠轮询 + 多信号 + 时间窗推断（workbuddy：pending tool / assistant incomplete / user-awaiting-reply → Working，5 分钟窗防僵尸；zcode 靠 tool_usage 的实时落盘）。
 - 如果目标 Agent 有"独立进程看不到 GUI 内存 live 状态"的隔离问题（如 codex），需要**第二条事件通道**（codex 连 ipc.sock 订阅广播）。这是最复杂的情况，优先评估能否避免。
 
 > 探测数据源时，先确认：① Agent 把状态写到哪（DB/文件/socket/云）？② 写入是否实时？③ 外部进程能否读到？④ 需要认证吗（workbuddy REST API 要密码，所以退回 jsonl）？
@@ -150,7 +150,7 @@ pub trait BackendObserver: Send {
 | 维度 | zcode | codex | workbuddy |
 |---|---|---|---|
 | 数据源 | 双 sqlite 只读 join | app-server RPC + ipc.sock 双通道 | jsonl 文件扫描 |
-| 实时状态来源 | tool_usage 实时落盘 | ipc.sock 广播覆盖 notLoaded | recency 窗推断 |
+| 实时状态来源 | tool_usage 实时落盘 | ipc.sock 广播覆盖 notLoaded | jsonl 多信号推断（tool/incomplete/user-awaiting）+ 时间窗 |
 | 跳转粒度 | workspace 级 | **session 级** | 未实现 |
 | 裁决动作 | 未实现(Phase 0) | 未实现(Phase 1) | 未实现 |
 | 启动外部进程 | 否 | 是(app-server 子进程) | 否 |

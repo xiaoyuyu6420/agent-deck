@@ -100,7 +100,8 @@ apps/desktop/src-tauri  (Tauri 二进制，前端 + 后端)
    - codex: 检测 GUI 是否在跑 → 没跑先 open -a ChatGPT 等就绪
             → open "codex://threads/<thread.id>" → GUI 聚焦+定位会话
    - zcode: open "zcode://workspace/open?path=<项目>" → 落到项目(非会话)
-   - workbuddy: 返回"跳转暂未实现"
+   - workbuddy: 检测 GUI 是否在跑 → 没跑先 open -a WorkBuddy 等就绪
+               → open "workbuddy://chat/<sessionId>" → GUI 聚焦+定位 task
 ```
 
 ## 关键不变量

@@ -358,6 +358,31 @@
   color: #9ca3af;
   margin-top: 4px;
 }
+.setting-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.setting-input input[type='number'] {
+  width: 64px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.28);
+  color: #f5f5f7;
+  font-size: 13px;
+  text-align: right;
+}
+.setting-input input[type='number']:focus {
+  outline: none;
+  border-color: rgba(96, 165, 250, 0.7);
+}
+.setting-unit {
+  font-size: 11px;
+  color: #9ca3af;
+  min-width: 2em;
+}
 .setting-help {
   font-size: 11px;
   color: #9ca3af;
@@ -381,6 +406,25 @@
   min-height: 0;
   overflow: auto;
   padding-right: 2px;
+}
+
+.bind-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bind-section + .bind-section {
+  margin-top: 10px;
+}
+
+.bind-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #a5b4fc;
+  padding: 4px 4px 2px;
+  text-transform: none;
 }
 
 .bind-item {

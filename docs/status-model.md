@@ -83,9 +83,22 @@ rgb = lerpHex('#304FFE', '#7B1FA2', longRun)  // 蓝→紫
 
 含义："还在啃，可能卡住了"。
 
-## done TTL
+## done TTL（open-aware）
 
-完成的任务保留绿色 5 分钟（`DONE_TTL_MS = 5 * 60 * 1000`），超时降为 idle/off。避免久远的 done 占槽。
+Done → Idle **不再**是「完成起算 5 分钟一律衰减」。对 **WorkBuddy**，host 层按「是否在 Agent Deck 点开」衰减：
+
+| 场景 | 行为 | 默认常量 / 配置 |
+|---|---|---|
+| Done 后**从未点键** | 保持 Done | 最长 `DONE_TTL_UNOPENED_MS = 12h`（`doneTtlUnopenedMs`）后强制 Idle |
+| Done 后**点过键** | 从点键时刻起倒计时 | `DONE_TTL_MS = 5min`（`doneTtlAfterOpenMs`）后 Idle |
+| ZCode / Codex | 本轮不改 | mapper 原语义 |
+
+要点：
+
+- 「点开」= Agent Deck **点击该键**（`open_slot_session`），不依赖后端 App 是否唤起成功。
+- 短 TTL 从 **点开时刻**起算，不是完成时刻；完成很久后才点开 → 再亮短 TTL。
+- 配置写入 `~/.agent-deck/settings.json`，设置页可改。
+- WorkBuddy mapper 只报告「完成 = Done」；衰减在 host-core 的 `decay_done_status`。
 
 ## 色弱友好
 

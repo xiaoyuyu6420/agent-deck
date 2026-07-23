@@ -77,6 +77,8 @@ pub fn map_thread(t: &CodexThread) -> SessionSnapshot {
         },
         updated_at,
         workspace_path: t.cwd.clone(),
+        project_category: None,
+        project_label: None,
     }
 }
 

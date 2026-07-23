@@ -67,8 +67,8 @@ fn main() {
 }
 
 fn print_snaps(snaps: &[agent_deck_protocol::SessionSnapshot]) {
-    use agent_deck_protocol::BackendId;
-    for s in snaps.iter().take(12) {
+    use agent_deck_protocol::{BackendId, ProjectCategory};
+    for s in snaps.iter().take(20) {
         let title: String = s.title.chars().take(42).collect();
         let ws = s
             .workspace_path
@@ -80,11 +80,20 @@ fn print_snaps(snaps: &[agent_deck_protocol::SessionSnapshot]) {
         } else {
             String::new()
         };
+        let cat = match s.project_category {
+            Some(ProjectCategory::Task) => "任务",
+            Some(ProjectCategory::Automation) => "自动化",
+            Some(ProjectCategory::Project) => "项目",
+            None => "-",
+        };
+        let label = s.project_label.as_deref().unwrap_or("");
         println!(
-            "  [{:?}] project={:<16} id={} status={:?}{} title={}",
+            "  [{:?}] cat={:<4} label={:<24} ws={:<20} id={} status={:?}{} title={}",
             s.backend,
+            cat,
+            label,
             ws,
-            &s.session_id[..s.session_id.len().min(20)],
+            &s.session_id[..s.session_id.len().min(12)],
             s.status,
             waiting,
             title
@@ -94,11 +103,21 @@ fn print_snaps(snaps: &[agent_deck_protocol::SessionSnapshot]) {
 }
 
 fn summarize(snaps: &[agent_deck_protocol::SessionSnapshot]) {
+    use agent_deck_protocol::ProjectCategory;
     let mut counts = std::collections::HashMap::new();
+    let mut cats = std::collections::HashMap::new();
     for s in snaps {
         *counts.entry(s.status).or_insert(0u32) += 1;
+        let key = match s.project_category {
+            Some(ProjectCategory::Task) => "任务",
+            Some(ProjectCategory::Automation) => "自动化",
+            Some(ProjectCategory::Project) => "项目",
+            None => "未分类",
+        };
+        *cats.entry(key).or_insert(0u32) += 1;
     }
     println!("状态分布: {:?}", counts);
+    println!("分类分布: {:?}", cats);
     let has_live = snaps
         .iter()
         .any(|s| matches!(s.status, DeckStatus::Working | DeckStatus::Waiting | DeckStatus::Error));

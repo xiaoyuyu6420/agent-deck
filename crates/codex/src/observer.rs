@@ -151,7 +151,13 @@ impl CodexObserver {
             });
         };
 
-        let result: ThreadListResult = match client.request("thread/list", serde_json::json!({})) {
+        // Explicitly request non-archived threads. Schema: archived=false|null
+        // returns only non-archived; omit would also default that way on some
+        // builds, but pass false so archived never leak into bind picker.
+        let result: ThreadListResult = match client.request(
+            "thread/list",
+            serde_json::json!({ "archived": false }),
+        ) {
             Ok(r) => r,
             Err(_) => {
                 // Drop dead client; next poll will try reconnect once.

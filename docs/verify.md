@@ -60,7 +60,7 @@ agent-deck verify
 | 1 | 在 ZCode Desktop 跑一个新任务（不弹确认） | A 槽出现，色块蓝、fx `breathe` |
 | 2 | 让任务执行一个需要确认的工具（Bash/Edit） | 同槽变橙，等 ~2min 后偏红、fx `blink_*` |
 | 3 | 在 ZCode 点 Accept | 同槽变蓝（working） |
-| 4 | 任务完成 | 同槽变绿（done），5min 后降为空 |
+| 4 | 任务完成 | 同槽变绿（done）；WorkBuddy 未点开保持绿（最长 12h），点开后默认 5min 变 idle |
 | 5 | 跑一个会失败的任务（例如让它 Bash 故意 exit 1） | 同槽变红、fx `solid` |
 | 6 | 同时跑 6 个任务 | 只有前 5 个有槽位，第 6 个等位 |
 | 7 | 把 verify 自己的开发会话放在 ZCode 里跑 | **不应**出现（被 exclude） |

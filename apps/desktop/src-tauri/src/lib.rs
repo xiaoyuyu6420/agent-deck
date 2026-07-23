@@ -26,6 +26,8 @@ struct BoardUpdate {
 #[serde(rename_all = "camelCase")]
 struct SettingsView {
     auto_fill: bool,
+    done_ttl_after_open_ms: u64,
+    done_ttl_unopened_ms: u64,
 }
 
 fn default_config() -> HostConfig {
@@ -81,14 +83,16 @@ fn open_slot_session(
         .find(|s| s.i == i)
         .cloned()
         .ok_or_else(|| format!("slot {i} not found"))?;
-    drop(service);
 
     let Some(session_id) = slot.session_id.clone() else {
         return Err("empty slot — long-press to bind a session".into());
     };
     let backend = slot.backend.unwrap_or(BackendId::Zcode);
+    // Mark opened immediately on key click (before backend app launch). This
+    // starts WorkBuddy's short Done TTL; success of the external open is
+    // intentionally irrelevant.
+    service.mark_opened(backend, &session_id);
     // Prefer live catalog for workspace path (board state doesn't carry it).
-    let mut service = state.service.lock().map_err(|e| e.to_string())?;
     let catalog = service.list_sessions();
     let info = catalog.iter().find(|s| s.session_id == session_id).cloned();
     drop(service);
@@ -96,11 +100,7 @@ fn open_slot_session(
     match backend {
         BackendId::Zcode => open_zcode_session(&app, &session_id, info.as_ref())?,
         BackendId::Codex => open_codex_session(&app, &session_id, info.as_ref())?,
-        // Observation-only phase: WorkBuddy sessions are listed and bound, but
-        // deep-link open is not wired yet (see docs/workbuddy-integration.md).
-        BackendId::Workbuddy => {
-            return Err("WorkBuddy 跳转暂未实现(仅观察)".into());
-        }
+        BackendId::Workbuddy => open_workbuddy_session(&app, &session_id, info.as_ref())?,
     }
     Ok(())
 }
@@ -256,6 +256,60 @@ fn wait_for_chatgpt_ready() {
     }
 }
 
+fn open_workbuddy_session(
+    _app: &AppHandle,
+    session_id: &str,
+    _info: Option<&SessionInfo>,
+) -> Result<(), String> {
+    // Verified 2026-07-23 against WorkBuddy.app (v5.2.6, bundle com.workbuddy.workbuddy):
+    //   - Info.plist CFBundleURLSchemes registers `workbuddy`.
+    //   - Renderer maps route `/task/<sessionId>` ↔ deeplink `workbuddy://chat/<sessionId>`
+    //     (ROUTE_PREFIX_TO_DEEPLINK_HOST: ["/task","chat"]).
+    //   - Main process has early-open-url capture + renderer queue so cold-start
+    //     deep links are buffered rather than swallowed (unlike early ChatGPT).
+    //   - session_id is the jsonl basename / `--session-id` / event.sessionId
+    //     (see crates/workbuddy + docs/workbuddy-integration.md).
+    //
+    // Still do a light cold-start warm-up when the GUI isn't running: launch the
+    // app first, wait for the main Electron process, then dispatch the URL so
+    // the first paint has a better chance of landing on /task/<id>.
+    if !workbuddy_app_running() {
+        let _ = Command::new("open").arg("-a").arg("WorkBuddy").status();
+        wait_for_workbuddy_ready();
+    }
+    let url = format!("workbuddy://chat/{session_id}");
+    Command::new("open")
+        .arg(&url)
+        .status()
+        .map_err(|e| format!("open WorkBuddy task failed: {e}"))?;
+    Ok(())
+}
+
+/// Whether the WorkBuddy.app GUI main process is running.
+///
+/// Matches `WorkBuddy.app/Contents/MacOS/Electron` (the app binary name is
+/// Electron). Child daemons also use that path with extra args, but presence of
+/// any WorkBuddy.app process is enough for "app is up" warm-up purposes.
+fn workbuddy_app_running() -> bool {
+    Command::new("pgrep")
+        .args(["-f", "WorkBuddy.app/Contents/MacOS"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn wait_for_workbuddy_ready() {
+    for _ in 0..40 {
+        if workbuddy_app_running() {
+            std::thread::sleep(Duration::from_millis(500));
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 /// Open an arbitrary URL/path via system `open(1)`.
 ///
 /// Currently unused (the codex path switched to a `codex://threads/...` deep
@@ -293,8 +347,11 @@ fn list_sessions(state: State<'_, Arc<AppState>>) -> Result<Vec<SessionInfo>, St
 #[tauri::command]
 fn get_settings(state: State<'_, Arc<AppState>>) -> Result<SettingsView, String> {
     let service = state.service.lock().map_err(|e| e.to_string())?;
+    let s = service.settings();
     Ok(SettingsView {
-        auto_fill: service.settings().auto_fill,
+        auto_fill: s.auto_fill,
+        done_ttl_after_open_ms: s.done_ttl_after_open_ms,
+        done_ttl_unopened_ms: s.done_ttl_unopened_ms,
     })
 }
 
@@ -302,6 +359,17 @@ fn get_settings(state: State<'_, Arc<AppState>>) -> Result<SettingsView, String>
 fn set_auto_fill(state: State<'_, Arc<AppState>>, enabled: bool) -> Result<(), String> {
     let mut service = state.service.lock().map_err(|e| e.to_string())?;
     service.set_auto_fill(enabled);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_done_ttl(
+    state: State<'_, Arc<AppState>>,
+    after_open_ms: u64,
+    unopened_ms: u64,
+) -> Result<(), String> {
+    let mut service = state.service.lock().map_err(|e| e.to_string())?;
+    service.set_done_ttl(after_open_ms, unopened_ms);
     Ok(())
 }
 
@@ -395,6 +463,7 @@ pub fn run() {
             list_sessions,
             get_settings,
             set_auto_fill,
+            set_done_ttl,
             hide_window,
             minimize_window,
             show_window,

@@ -106,7 +106,7 @@ idle                                              → idle
 
 - `JsonRpcClient::spawn`（`crates/codex/src/rpc.rs:97`）：起 `codex app-server --listen stdio://` 子进程
 - `initialize` + `notifications/initialized` 握手（rpc.rs:114）。`InitializeParams` 只要求 `clientInfo{name,version}`（官方 schema 验证；早期代码多传的 `protocolVersion` 已移除）
-- `thread/list` 轮询拉取（observer.rs:134），非事件订阅
+- `thread/list` 轮询拉取（observer.rs），非事件订阅；参数显式传 `{ archived: false }`，归档线程不进 bind 列表
 - `poll_once`（近 20 活跃）/ `catalog_once`（长窗口 200/90 天）/ `poll_pinned_once`（按 id 直查）三档
 
 > 早期设想"探测 `remote-control` → fallback `app-server daemon` → 连 `ipc.sock`"**未采用**——stdio 子进程方案更简单且已验证，不需要 daemon/socket 管理。
@@ -167,37 +167,111 @@ deep link 已能驱动桌面窗口跳转，无需 RPC。但 `thread/resume {thre
 | app-server 实验性 | fallback `remote-control`，两家都试 |
 | codex 未启动 | adapter 优雅降级，不报错只 log |
 
-## 实时状态（ipc.sock）：e2e 发现与现状
+## 实时状态（ipc.sock）：协议定稿（2026-07-23 阶段 0）
 
-> 本节由 2026-07-23 的端到端实测修正，记录一个重要的协议认知更新。
+> 本节由 app.asar + webview 逆向 + 动态抓包闭环。结论：**现有 `IpcStateWatcher` 架构可复用，但订阅/解析逻辑必须重做**。
 
 ### 背景
 
-独立 spawn 的 app-server 看不到 GUI 的 live thread 状态（进程内存隔离，`thread/list` 全 `notLoaded`）。为补全 working/waiting，`crates/codex/src/ipc.rs` 的 `IpcStateWatcher` 连 GUI 的 `~/.codex/ipc/ipc.sock`（IpcRouter，4 字节小端长度前缀 + JSON），订阅广播。
+独立 spawn 的 app-server 看不到 GUI 的 live thread 状态（进程内存隔离，`thread/list` 全 `notLoaded`）。GUI 通过 `~/.codex/ipc/ipc.sock`（IpcRouter）做跨进程 stream 同步。这是 working/waiting 的唯一实时来源。
 
-### e2e 实测发现（协议认知修正）
+### 帧协议（已验证）
 
-探针 `crates/codex/examples/ipc_probe.rs` + python 裸 ipc 监听双通道实测，揭示一个**关键的协议理解错误**：
+- Unix domain socket：`~/.codex/ipc/ipc.sock`
+- 帧：`4 字节小端长度前缀`（= payload 字节数，**不含**自身 4 字节）+ UTF-8 JSON
+- 握手：`{type:"request", method:"initialize", params:{clientType:"extension"}}`
+  → `{type:"response", resultType:"success", result:{clientId}}`
+- 消息 type：`request` / `response` / `broadcast` / `client-discovery-request` / `client-discovery-response`
 
-| 广播 method | 最初理解 | 实测真相（逆向 app.asar 确认） |
+### Stream follower 注册（决定性发现）
+
+**被动连入不够。** GUI 会给我们发 `thread-stream-following-changed{following:true}`（表示「你应该 follow 这个会话」），但这只是邀请；**我们必须主动回广播同样的 method，owner 才会把我们加入 `followerClientIds`**。
+
+| 步骤 | 方向 | 内容 |
 |---|---|---|
-| `thread-stream-state-changed` | turn 状态（working/waiting）广播，payload `{status, threadId}` | ❌ **是对话内容增量同步**（`change.type=patches/snapshot`），且只推给已注册的 stream **follower**（`targetClientIds=getFollowerClientIds`）。作为 `clientType:"extension"` 连入**收不到**它 |
-| `thread-stream-following-changed` | — | ✅ 能收到，payload `{conversationId, following:bool}`，表示 GUI 当前聚焦哪个 thread |
+| 1 | 我→router | `initialize` 拿 `clientId` |
+| 2 | owner→我 | `thread-stream-following-changed` `{conversationId, hostId, following:true}`（`targetClientIds=[我]`） |
+| 3 | **我→全员** | **主动广播** `thread-stream-following-changed` `{conversationId, hostId, following:true}`（不带 `targetClientIds`） |
+| 4 | owner→我 | **立刻** `thread-stream-state-changed` `change.type=snapshot`（`targetClientIds=[我]`） |
+| 5 | owner→我 | 后续 turn 期间 `change.type=patches`（仅当我们在 `followerClientIds` 里） |
 
-实测：60 秒持续监听，GUI 有操作时**零条** `thread-stream-state-changed`，仅收到 `following-changed`。
+额外：owner 若发 `thread-stream-following-status-requested{conversationId,hostId}`，我们若已 follow 该会话，应再次 announce `following:true` 给请求方（webview 里 `followedConversationIds.has(n)` 时回 `dispatchConversationFollowing(n, true, [sourceClientId])`）。
 
-### 当前状态
+**实测（2026-07-23）**：
 
-- ✅ **ipc.sock 握手连通**（`initialize` → clientId）。
-- ✅ **app-server RPC 通**（`thread/list` 返回全集，catalog 25 个会话）。
-- ✅ **降级正常**（GUI 无 active turn 时 poll 返回空，不崩溃）。
-- ⚠️ **working/waiting 实时覆盖未生效**：`parse_broadcast` 解析的 `{status, threadId}` 结构与真实 payload（`{conversationId, change:{...}}`）不匹配，且 extension client 非 follower 收不到内容流。
+1. 被动 extension 监听 + 真实 turn 发生 → **0 条** `state-changed`（会话 jsonl 从 126KB→282KB 证明 turn 真实发生）。
+2. 主动 announce `following=true` 后 → **立刻 1 条** `state-changed` snapshot，`targetClientIds` 仅含我们，`conversationState.threadRuntimeStatus={type:"idle"}`。
 
-### 待重新设计的路径
+`thread-follower-load-complete-history` 等 `thread-follower-*` request **不是**注册路径（返回 `no-client-found`，那是 follower→owner 的控制通道，前提已是 follower）。
 
-要拿到真正的 turn 状态，需重新评估 ipc 接入方式（按可能性排序）：
-1. **注册成 stream follower**：发 follower 注册请求，接收 `thread-stream-state-changed` 的 snapshot，从中解析 `conversationState` 的 active/resumeState 字段。
-2. **轮询 `thread/stream/status` 类请求**（若 IPC 总线有对应 request method）。
-3. **退回 app-server 的 `thread/status/changed` JSON-RPC 通知**：但那是 GUI app-server 的内部通道（stdio），外部 app-server 进程收不到。
+### `thread-stream-state-changed` 真实 payload
 
-`IpcStateWatcher` 的帧编解码（length-prefixed）+ 握手 + 后台线程架构**已验证可用**，仅需修正订阅/解析逻辑——这是后续任务，不在当前范围。当前 codex 会话在 deck 上显示的状态是静态 `notLoaded`（与 ipc 接入前一致，不退化）。
+**不是** `{status, threadId}`。真实结构：
+
+```json
+{
+  "type": "broadcast",
+  "method": "thread-stream-state-changed",
+  "sourceClientId": "<owner>",
+  "targetClientIds": ["<follower>"],
+  "params": {
+    "conversationId": "<threadId>",
+    "hostId": "local",
+    "change": {
+      "type": "snapshot" | "patches",
+      "revision": 1,
+      "conversationState": { /* only for snapshot */ },
+      "baseRevision": 0,          /* only for patches */
+      "patches": [ /* only for patches */ ]
+    }
+  }
+}
+```
+
+### 状态字段映射（从 snapshot / patches 推导）
+
+`conversationState`（及 patches 应用后的同构对象）关键字段：
+
+| 字段 | 含义 | → DeckStatus |
+|---|---|---|
+| `threadRuntimeStatus` | 与 app-server `ThreadStatus` 同构：`notLoaded` / `idle` / `systemError` / `active{activeFlags}` | 主映射源 |
+| `threadRuntimeStatus.activeFlags` | `waitingOnApproval` / `waitingOnUserInput` | → **Waiting** |
+| `threadRuntimeStatus.type=active` 且 flags 空 | 正在跑 | → **Working** |
+| `threadRuntimeStatus.type=idle` | 空闲 | → Idle / Done（可结合 recency） |
+| `threadRuntimeStatus.type=systemError` | 错误 | → Error |
+| `resumeState` | `needs_resume` / `resuming` / `resumed` | `needs_resume` 时若 status 仍 active 表示远端仍在跑但本地未 hydrate |
+| `requests[]` | 未决审批/用户输入 | 非空 → Waiting（与 activeFlags 互补） |
+| `turns[-1].status` | `inProgress` 等 | 辅助判断 Working |
+| `title` / `cwd` / `id` | 元数据 | 可覆盖 catalog 字段 |
+
+GUI 内部「是否 active」判定（webview `rm()`）：
+
+```
+needs_resume ? threadRuntimeStatus.type==active
+: turns 空 ? resumeState==resuming
+: turns[-1].status==inProgress
+```
+
+对 deck 观察，**优先直接读 `threadRuntimeStatus`（+ requests）**，不必复刻完整 active 函数。
+
+### 阶段 1 实现状态（已落地，`crates/codex/src/ipc.rs`）
+
+| 项 | 状态 |
+|---|---|
+| 帧编解码 / 握手 / 后台线程 | ✅ 保留 |
+| 收到 `following-changed(true)` → **announce 回 `following=true`** | ✅ |
+| 握手前到达的邀请 → `pending_follow`，拿到 `clientId` 后 flush | ✅ |
+| 收到 `following-status-requested` 且已 follow → 再 announce | ✅ |
+| `client-discovery-request` → `canHandle:false` | ✅ |
+| 解析 `state-changed` snapshot → `conversationState.threadRuntimeStatus` | ✅ |
+| snapshot 补强：`requests[]` / 末 turn `inProgress` | ✅ |
+| 解析 patches（抠 `threadRuntimeStatus` / `inProgress` / waiting 标志） | ✅ best-effort |
+| `observer` overlay 非 Idle 实时态覆盖 `notLoaded` | ✅ 沿用 |
+| 单测 | ✅ `cargo test -p agent-deck-codex --lib` 22 passed |
+| e2e 探针 | ✅ `examples/ipc_probe.rs` 文案/语义已对齐 follower 路径 |
+
+### 不走的路
+
+- **纯 jsonl 扫描**：实时性不够（用户明确否决）。
+- **独立 app-server 的 `thread/status/changed`**：进程隔离，看不到 GUI live thread。
+- **`thread-follower-*` RPC 当注册**：那是已 follower 后的控制通道，不是注册。

@@ -36,6 +36,8 @@ interface LedFrame {
   slots: LedSlot[]
 }
 
+type ProjectCategory = 'project' | 'task' | 'automation'
+
 interface SessionInfo {
   backend: BackendId
   sessionId: string
@@ -44,10 +46,18 @@ interface SessionInfo {
   workspacePath?: string
   detail?: string
   updatedAt: number
+  /** WorkBuddy bind-picker section; other backends usually omit. */
+  projectCategory?: ProjectCategory
+  /** Human label for the group row (task title / automation name / folder). */
+  projectLabel?: string
 }
 
 interface SettingsView {
   autoFill: boolean
+  /** Keep Done green this long after the user opens the key (ms). */
+  doneTtlAfterOpenMs: number
+  /** Force Idle if Done is never opened (ms). */
+  doneTtlUnopenedMs: number
 }
 
 const STATUS_LABEL: Record<DeckStatus, string> = {
@@ -69,7 +79,11 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 
 let latestBoard: BoardState | null = null
 let latestLeds: LedFrame | null = null
-let settings: SettingsView = { autoFill: false }
+let settings: SettingsView = {
+  autoFill: false,
+  doneTtlAfterOpenMs: 5 * 60 * 1000,
+  doneTtlUnopenedMs: 12 * 60 * 60 * 1000,
+}
 let view: 'keyboard' | 'settings' | 'bind' = 'keyboard'
 let bindSlot: number | null = null
 let bindStep: 'backend' | 'project' | 'session' = 'backend'
@@ -112,10 +126,50 @@ function escapeHtml(s: string): string {
     .replaceAll('"', '&quot;')
 }
 
+const CATEGORY_ORDER: ProjectCategory[] = ['task', 'project', 'automation']
+const CATEGORY_LABEL: Record<ProjectCategory, string> = {
+  task: '任务',
+  project: '项目',
+  automation: '自动化',
+}
+
+/** Fallback leaf-name label when backend didn't set projectLabel. */
 function projectName(path?: string): string {
   if (!path) return '(unknown project)'
-  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
+  const norm = path.replace(/\\/g, '/')
+  const parts = norm.split('/').filter(Boolean)
   return parts[parts.length - 1] || path
+}
+
+/**
+ * Group key for bind step 2 — one row per workspace, mirroring WorkBuddy's UI:
+ * - 任务 / 项目 / 自动化 all dedupe by workspace path (cwd).
+ *   A playground task cwd holds one session; an automation cwd holds many runs;
+ *   a project cwd holds many sessions — but the bind row is the workspace.
+ */
+function bindGroupKey(s: SessionInfo): string {
+  const cat = s.projectCategory
+  const ws = s.workspacePath || '(unknown)'
+  if (cat === 'task') return `task:${ws}`
+  if (cat === 'automation') return `auto:${ws}`
+  return `proj:${ws}`
+}
+
+function bindGroupLabel(s: SessionInfo, peers: SessionInfo[]): string {
+  if (s.projectLabel) return s.projectLabel
+  if (s.projectCategory === 'task') return s.title || projectName(s.workspacePath)
+  if (s.projectCategory === 'automation') {
+    return s.projectLabel || projectName(s.workspacePath)
+  }
+  // Prefer a non-empty label from any peer in the group.
+  for (const p of peers) {
+    if (p.projectLabel) return p.projectLabel
+  }
+  return projectName(s.workspacePath)
+}
+
+function bindGroupCategory(peers: SessionInfo[]): ProjectCategory {
+  return peers.find((p) => p.projectCategory)?.projectCategory ?? 'project'
 }
 
 function clearLongPress() {
@@ -303,6 +357,8 @@ function paintKeyboard(board: BoardState, leds: LedFrame) {
 }
 
 function paintSettings() {
+  const afterOpenMin = Math.max(1, Math.round(settings.doneTtlAfterOpenMs / 60_000))
+  const unopenedHours = Math.max(1, Math.round(settings.doneTtlUnopenedMs / 3_600_000))
   app.innerHTML = `
     <div class="panel-page">
       <div class="titlebar" data-tauri-drag-region>
@@ -320,9 +376,29 @@ function paintSettings() {
           </div>
           <input type="checkbox" id="auto-fill" ${settings.autoFill ? 'checked' : ''} />
         </label>
+        <label class="setting-row">
+          <div>
+            <div class="setting-title">点开后保持完成态</div>
+            <div class="setting-desc">在 Agent Deck 点过该键后，Done（绿）保持多久再变 Idle</div>
+          </div>
+          <span class="setting-input">
+            <input type="number" id="done-ttl-open" min="1" step="1" value="${afterOpenMin}" />
+            <span class="setting-unit">分钟</span>
+          </span>
+        </label>
+        <label class="setting-row">
+          <div>
+            <div class="setting-title">未点开最长保持完成态</div>
+            <div class="setting-desc">从未点开时，Done 最多保持多久后强制变 Idle（WorkBuddy）</div>
+          </div>
+          <span class="setting-input">
+            <input type="number" id="done-ttl-unopened" min="1" step="1" value="${unopenedHours}" />
+            <span class="setting-unit">小时</span>
+          </span>
+        </label>
         <div class="setting-help">
           <p><b>绑定会话：</b>在键盘上<strong>长按</strong>任意键（如 A3）→ 选 ZCode/Codex → 选项目 → 选会话。</p>
-          <p><b>打开会话：</b>点绑定后的键 → 打开 ZCode 并跳到对应项目（会话栏）。</p>
+          <p><b>打开会话：</b>点绑定后的键 → 打开对应工具；同时开始 Done 短倒计时。</p>
           <p><b>解绑：</b>在绑定面板点「解绑此键」。</p>
           <p><b>隐藏/恢复：</b>点右上角 — 隐藏到托盘；<strong>左键点菜单栏托盘图标</strong>可再打开。右键托盘出菜单。</p>
           <p><b>移动/缩放：</b>拖标题栏移动；拖窗口边角缩放。</p>
@@ -345,6 +421,23 @@ function paintSettings() {
     await invoke('set_auto_fill', { enabled })
     settings.autoFill = enabled
   })
+
+  const persistDoneTtl = async () => {
+    const openEl = document.getElementById('done-ttl-open') as HTMLInputElement | null
+    const unopenedEl = document.getElementById('done-ttl-unopened') as HTMLInputElement | null
+    if (!openEl || !unopenedEl) return
+    const afterOpenMs = Math.max(1, Math.round(Number(openEl.value) || 5)) * 60_000
+    const unopenedMs = Math.max(1, Math.round(Number(unopenedEl.value) || 12)) * 3_600_000
+    await invoke('set_done_ttl', { afterOpenMs, unopenedMs })
+    settings.doneTtlAfterOpenMs = afterOpenMs
+    settings.doneTtlUnopenedMs = unopenedMs
+  }
+  document.getElementById('done-ttl-open')?.addEventListener('change', () => {
+    void persistDoneTtl()
+  })
+  document.getElementById('done-ttl-unopened')?.addEventListener('change', () => {
+    void persistDoneTtl()
+  })
 }
 
 function paintBind() {
@@ -359,52 +452,99 @@ function paintBind() {
         ${backends
           .map((b) => {
             const list = sessionsCache.filter((s) => s.backend === b)
-            const projects = new Set(list.map((s) => s.workspacePath || '(unknown project)'))
+            const groups = new Set(list.map((s) => bindGroupKey(s)))
             return `<button class="bind-item" data-backend="${b}">
               <span>${BACKEND_LABEL[b]}</span>
-              <span class="muted">${projects.size} 项目 · ${list.length} 会话</span>
+              <span class="muted">${groups.size} 分组 · ${list.length} 会话</span>
             </button>`
           })
           .join('')}
       </div>
     `
   } else if (bindStep === 'project' && bindBackend) {
-    const byProject = new Map<string, SessionInfo[]>()
+    const byGroup = new Map<string, SessionInfo[]>()
     for (const s of sessionsCache.filter((x) => x.backend === bindBackend)) {
-      const key = s.workspacePath || '(unknown project)'
-      const list = byProject.get(key) ?? []
+      const key = bindGroupKey(s)
+      const list = byGroup.get(key) ?? []
       list.push(s)
-      byProject.set(key, list)
+      byGroup.set(key, list)
     }
-    const projects = [...byProject.entries()].sort((a, b) => {
-      const aMax = Math.max(...a[1].map((s) => s.updatedAt))
-      const bMax = Math.max(...b[1].map((s) => s.updatedAt))
-      return bMax - aMax
+    type Group = { key: string; list: SessionInfo[]; cat: ProjectCategory; label: string; maxAt: number }
+    const groups: Group[] = [...byGroup.entries()].map(([key, list]) => {
+      const sorted = list.slice().sort((a, b) => b.updatedAt - a.updatedAt)
+      const cat = bindGroupCategory(sorted)
+      const label = bindGroupLabel(sorted[0], sorted)
+      const maxAt = Math.max(...sorted.map((s) => s.updatedAt))
+      return { key, list: sorted, cat, label, maxAt }
     })
-    body = `
-      <div class="bind-step">2. 选择项目 · ${BACKEND_LABEL[bindBackend]} · ${projects.length} 个</div>
-      <div class="bind-list">
-        ${
-          projects.length
-            ? projects
-                .map(([p, list]) => {
-                  const latest = list
-                    .slice()
-                    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
-                  return `<button class="bind-item" data-project="${escapeHtml(p)}">
-                    <span>${escapeHtml(projectName(p))}</span>
+    groups.sort((a, b) => {
+      const ca = CATEGORY_ORDER.indexOf(a.cat)
+      const cb = CATEGORY_ORDER.indexOf(b.cat)
+      return ca - cb || b.maxAt - a.maxAt
+    })
+    const hasSections = groups.some((g) => g.cat !== 'project')
+      || groups.some((g) => g.list.some((s) => s.projectCategory))
+    const sectionsHtml = hasSections
+      ? CATEGORY_ORDER.map((cat) => {
+          const section = groups.filter((g) => g.cat === cat)
+          if (!section.length) return ''
+          return `
+            <div class="bind-section">
+              <div class="bind-section-title">${CATEGORY_LABEL[cat]} · ${section.length}</div>
+              ${section
+                .map((g) => {
+                  const latest = g.list[0]
+                  const secondary =
+                    g.cat === 'project'
+                      ? g.list[0]?.workspacePath || ''
+                      : latest
+                        ? `${STATUS_LABEL[latest.status]}${g.list.length > 1 ? ` · ${g.list.length} 会话` : ''}`
+                        : ''
+                  return `<button class="bind-item" data-project="${escapeHtml(g.key)}">
+                    <span>${escapeHtml(g.label)}</span>
                     <div class="bind-meta">
-                      <span class="muted">${escapeHtml(p)}</span>
-                      <span class="bind-count">${list.length} 会话</span>
+                      <span class="muted">${escapeHtml(secondary)}</span>
+                      ${
+                        g.cat === 'project'
+                          ? `<span class="bind-count">${g.list.length} 会话</span>`
+                          : g.list.length > 1
+                            ? `<span class="bind-count">${g.list.length}</span>`
+                            : ''
+                      }
                     </div>
                     ${
-                      latest
+                      g.cat === 'project' && latest
                         ? `<span class="muted">最近：${escapeHtml(latest.title)} · ${STATUS_LABEL[latest.status]}</span>`
                         : ''
                     }
                   </button>`
                 })
-                .join('')
+                .join('')}
+            </div>`
+        }).join('')
+      : groups
+          .map((g) => {
+            const latest = g.list[0]
+            return `<button class="bind-item" data-project="${escapeHtml(g.key)}">
+              <span>${escapeHtml(g.label)}</span>
+              <div class="bind-meta">
+                <span class="muted">${escapeHtml(g.list[0]?.workspacePath || '')}</span>
+                <span class="bind-count">${g.list.length} 会话</span>
+              </div>
+              ${
+                latest
+                  ? `<span class="muted">最近：${escapeHtml(latest.title)} · ${STATUS_LABEL[latest.status]}</span>`
+                  : ''
+              }
+            </button>`
+          })
+          .join('')
+    body = `
+      <div class="bind-step">2. 选择${hasSections ? '分组' : '项目'} · ${BACKEND_LABEL[bindBackend]} · ${groups.length} 个</div>
+      <div class="bind-list">
+        ${
+          groups.length
+            ? sectionsHtml
             : `<div class="empty-hint">没有来自 ${BACKEND_LABEL[bindBackend]} 的会话</div>`
         }
       </div>
@@ -412,14 +552,19 @@ function paintBind() {
   } else if (bindStep === 'session' && bindBackend) {
     const list = sessionsCache
       .filter(
-        (s) =>
-          s.backend === bindBackend &&
-          (s.workspacePath || '(unknown project)') === (bindProject || '(unknown project)'),
+        (s) => s.backend === bindBackend && bindGroupKey(s) === (bindProject || ''),
       )
       .slice()
       .sort((a, b) => b.updatedAt - a.updatedAt)
+    // Header label: prefer projectLabel / title over raw group key.
+    const headerLabel =
+      list[0]?.projectLabel ||
+      (list[0]?.projectCategory === 'task' ? list[0]?.title : undefined) ||
+      projectName(list[0]?.workspacePath) ||
+      bindProject ||
+      ''
     body = `
-      <div class="bind-step">3. 选择会话 · ${escapeHtml(projectName(bindProject || undefined))} · ${list.length} 条</div>
+      <div class="bind-step">3. 选择会话 · ${escapeHtml(headerLabel)} · ${list.length} 条</div>
       <div class="bind-list">
         ${
           list.length
@@ -431,7 +576,7 @@ function paintBind() {
                   </button>`,
                 )
                 .join('')
-            : `<div class="empty-hint">此项目下没有会话</div>`
+            : `<div class="empty-hint">此分组下没有会话</div>`
         }
       </div>
     `

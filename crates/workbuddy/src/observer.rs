@@ -1,4 +1,4 @@
-//! Read-only WorkBuddy jsonl observer.
+//! Read-only WorkBuddy jsonl observer + sqlite title overlay.
 //!
 //! Each WorkBuddy task is a `<session-id>.jsonl` file under
 //! `~/.workbuddy/projects/<workspace>/`. This observer scans that tree
@@ -7,12 +7,21 @@
 //! options struct with `~/.workbuddy` defaults, an `open()` that probes the
 //! tree exists, and three poll tiers (board / catalog / pinned).
 //!
+//! **Title source of truth**: user renames live in
+//! `~/.workbuddy/workbuddy.db` (`sessions.custom_title`), **not** in jsonl.
+//! Each poll reloads DB meta and overlays titles/cwd onto jsonl snapshots.
+//!
 //! Like zcode, a missing tree degrades to an empty observer (returns
 //! `Ok(vec![])`) rather than an error — one unavailable backend must never
 //! break the others.
 
+use crate::db_meta::{
+    classify_workspace, is_archived, is_claw_workspace, load_automation_names,
+    load_deleted_session_ids, load_session_meta, preferred_title, SessionMeta,
+};
 use crate::mapper::{aggregate, map_session, SessionEvent};
 use agent_deck_protocol::SessionSnapshot;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,6 +41,9 @@ pub enum ObserverError {
 pub struct JsonlObserverOptions {
     /// Root of the per-session jsonl tree, normally `~/.workbuddy/projects`.
     pub projects_dir: PathBuf,
+    /// WorkBuddy local sqlite with session titles. Normally
+    /// `~/.workbuddy/workbuddy.db`. Optional — missing DB just skips overlay.
+    pub db_path: PathBuf,
     pub exclude_workspaces: Vec<String>,
     pub exclude_task_ids: Vec<String>,
     /// Fail (instead of degrade) when the tree is absent. Tests use this.
@@ -45,6 +57,7 @@ impl Default for JsonlObserverOptions {
         let home = dirs_home();
         Self {
             projects_dir: home.join(".workbuddy/projects"),
+            db_path: home.join(".workbuddy/workbuddy.db"),
             exclude_workspaces: vec![],
             exclude_task_ids: vec![],
             fail_on_missing: false,
@@ -147,6 +160,10 @@ impl JsonlObserver {
         if !self.available {
             return Ok(vec![]);
         }
+        // Reload titles/classification each poll — renames must show up without restart.
+        let db_meta = load_session_meta(&self.opts.db_path);
+        let automation_names = load_automation_names(&self.opts.db_path);
+        let deleted = load_deleted_session_ids(&self.opts.db_path);
         let mut snaps = Vec::new();
         // Projects tree: <projects_dir>/<workspace-dir>/<session-id>.jsonl
         for ws_entry in fs::read_dir(&self.opts.projects_dir)? {
@@ -164,7 +181,32 @@ impl JsonlObserver {
                     Some(s) => s.to_string(),
                     None => continue,
                 };
-                if let Some(snap) = self.read_session(&path, &session_id, now) {
+                // Soft-deleted in sqlite: jsonl may linger — hide from catalog/board.
+                if deleted.contains(&session_id) {
+                    continue;
+                }
+                // Archived via sessions.status: WorkBuddy keeps the row + jsonl
+                // but hides it from the UI. Mirror that here.
+                if let Some(meta) = db_meta.get(&session_id) {
+                    if is_archived(meta) {
+                        continue;
+                    }
+                }
+                if let Some(mut snap) =
+                    self.read_session(&path, &session_id, now, &db_meta, &automation_names)
+                {
+                    // Claw workspace is anchored out of the normal lists in the
+                    // WorkBuddy UI (it has a dedicated sidebar entry). Mirror that
+                    // so the bind picker doesn't show a stray "Claw" space.
+                    if is_claw_workspace(snap.workspace_path.as_deref()) {
+                        continue;
+                    }
+                    // Prefer DB updated_at for ordering (WorkBuddy UI sorts by it).
+                    if let Some(meta) = db_meta.get(&session_id) {
+                        if let Some(ts) = meta.updated_at {
+                            snap.updated_at = ts;
+                        }
+                    }
                     snaps.push(snap);
                 }
             }
@@ -179,6 +221,8 @@ impl JsonlObserver {
         path: &Path,
         session_id: &str,
         now: u64,
+        db_meta: &HashMap<String, SessionMeta>,
+        automation_names: &HashMap<String, String>,
     ) -> Option<SessionSnapshot> {
         let contents = fs::read_to_string(path).ok()?;
         let mut events: Vec<SessionEvent> = Vec::new();
@@ -195,8 +239,37 @@ impl JsonlObserver {
         if events.is_empty() {
             return None;
         }
-        let signals = aggregate(&events, session_id);
-        Some(map_session(&signals, now))
+        // Soft Working (streaming / thinking) needs file mtime: after user
+        // Stop, WorkBuddy freezes the incomplete row and stops appending.
+        let file_mtime_ms = fs::metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64);
+        let signals = aggregate(&events, session_id, file_mtime_ms);
+        let mut snap = map_session(&signals, now);
+        // DB overlay: user renames live only in workbuddy.db.
+        let meta = db_meta.get(session_id);
+        if let Some(meta) = meta {
+            if let Some(t) = preferred_title(meta) {
+                snap.title = t;
+            }
+            if snap.workspace_path.is_none() {
+                if let Some(cwd) = meta.cwd.clone() {
+                    snap.workspace_path = Some(cwd);
+                }
+            }
+        }
+        // Bind-picker classification (任务 / 项目 / 自动化).
+        let (cat, label) = classify_workspace(
+            snap.workspace_path.as_deref(),
+            meta,
+            automation_names,
+            &snap.title,
+        );
+        snap.project_category = Some(cat);
+        snap.project_label = Some(label);
+        Some(snap)
     }
 
     fn is_excluded(&self, snap: &SessionSnapshot) -> bool {
@@ -229,7 +302,7 @@ pub fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_deck_protocol::BackendId;
+    use agent_deck_protocol::{BackendId, ProjectCategory};
     use std::fs;
     use tempfile::tempdir;
 
@@ -374,5 +447,185 @@ mod tests {
         });
         obs.open().unwrap();
         assert!(obs.poll_once().unwrap().is_empty());
+    }
+
+    #[test]
+    fn db_custom_title_overrides_jsonl_ai_title() {
+        // Regression: user rename only lands in workbuddy.db, not jsonl.
+        let tmp = tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let ws = projects.join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        write_session(
+            &ws,
+            "s1",
+            &[r#"{"timestamp":1000,"type":"ai-title","aiTitle":"打招呼","cwd":"/Users/x/WorkBuddy/t"}"#],
+        );
+
+        let db = tmp.path().join("workbuddy.db");
+        {
+            use rusqlite::Connection;
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    custom_title TEXT,
+                    cwd TEXT,
+                    is_playground INTEGER,
+                    deleted_at INTEGER
+                );
+                INSERT INTO sessions (id, title, custom_title, cwd, is_playground, deleted_at)
+                VALUES ('s1', '打招呼', 'ai', '/Users/x/WorkBuddy/t', 1, NULL);",
+            )
+            .unwrap();
+        }
+
+        let mut obs = JsonlObserver::new(JsonlObserverOptions {
+            projects_dir: projects,
+            db_path: db,
+            ..Default::default()
+        });
+        obs.open().unwrap();
+        let snaps = obs.poll_once().unwrap();
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].title, "ai");
+        // is_playground=1 → 任务; label is the session title.
+        assert_eq!(
+            snaps[0].project_category,
+            Some(ProjectCategory::Task),
+        );
+        assert_eq!(snaps[0].project_label.as_deref(), Some("ai"));
+    }
+
+    /// An automation session should be classified as 自动化 and labelled by the
+    /// `automations.name` (via cwd reverse-lookup), not its folder name.
+    #[test]
+    fn automation_session_classified_and_named_from_table() {
+        let tmp = tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let ws = projects.join("automation-2026-07-17-10-27-12");
+        fs::create_dir_all(&ws).unwrap();
+        write_session(
+            &ws,
+            "s1",
+            &[r#"{"timestamp":1,"type":"ai-title","aiTitle":"x","cwd":"/Users/x/WorkBuddy/automation-2026-07-17-10-27-12"}"#],
+        );
+
+        let db = tmp.path().join("workbuddy.db");
+        {
+            use rusqlite::Connection;
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    custom_title TEXT,
+                    cwd TEXT,
+                    is_playground INTEGER,
+                    is_background_automation INTEGER,
+                    deleted_at INTEGER
+                );
+                INSERT INTO sessions (id, title, custom_title, cwd, is_playground, is_background_automation, deleted_at)
+                VALUES ('s1','x',NULL,'/Users/x/WorkBuddy/automation-2026-07-17-10-27-12',0,1,NULL);
+                CREATE TABLE automations (id TEXT PRIMARY KEY, name TEXT, cwds TEXT, deleted_at INTEGER);
+                INSERT INTO automations (id, name, cwds, deleted_at)
+                VALUES ('a1','每日 AI 新闻推送','[\"/Users/x/WorkBuddy/automation-2026-07-17-10-27-12\"]',NULL);",
+            )
+            .unwrap();
+        }
+
+        let mut obs = JsonlObserver::new(JsonlObserverOptions {
+            projects_dir: projects,
+            db_path: db,
+            ..Default::default()
+        });
+        obs.open().unwrap();
+        let snaps = obs.poll_once().unwrap();
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(
+            snaps[0].project_category,
+            Some(ProjectCategory::Automation)
+        );
+        assert_eq!(snaps[0].project_label.as_deref(), Some("每日 AI 新闻推送"));
+    }
+
+    /// A real-path project session (no playground/automation flag) classifies as
+    /// 项目 and uses the folder leaf as the label.
+    #[test]
+    fn project_session_classified_with_folder_leaf() {
+        let tmp = tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let ws = projects.join("modjing");
+        fs::create_dir_all(&ws).unwrap();
+        write_session(
+            &ws,
+            "s1",
+            &[r#"{"timestamp":1,"type":"ai-title","aiTitle":"fix bug","cwd":"/Users/x/Desktop/modjing"}"#],
+        );
+
+        let mut obs = JsonlObserver::new(JsonlObserverOptions {
+            projects_dir: projects,
+            ..Default::default()
+        });
+        obs.open().unwrap();
+        let snaps = obs.poll_once().unwrap();
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(
+            snaps[0].project_category,
+            Some(ProjectCategory::Project)
+        );
+        assert_eq!(snaps[0].project_label.as_deref(), Some("modjing"));
+    }
+
+    /// Soft-deleted sessions must not surface even if their jsonl still exists.
+    #[test]
+    fn soft_deleted_session_hidden_from_poll() {
+        let tmp = tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let ws = projects.join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        write_session(
+            &ws,
+            "s1",
+            &[r#"{"timestamp":1,"type":"message","cwd":"/Users/x/WorkBuddy/t"}"#],
+        );
+        write_session(
+            &ws,
+            "s2",
+            &[r#"{"timestamp":2,"type":"message","cwd":"/Users/x/WorkBuddy/t"}"#],
+        );
+
+        let db = tmp.path().join("workbuddy.db");
+        {
+            use rusqlite::Connection;
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    custom_title TEXT,
+                    cwd TEXT,
+                    is_playground INTEGER,
+                    deleted_at INTEGER
+                );
+                INSERT INTO sessions (id, title, custom_title, cwd, is_playground, deleted_at)
+                VALUES ('s1',NULL,NULL,NULL,0,1700000000);
+                INSERT INTO sessions (id, title, custom_title, cwd, is_playground, deleted_at)
+                VALUES ('s2',NULL,NULL,NULL,0,NULL);",
+            )
+            .unwrap();
+        }
+
+        let mut obs = JsonlObserver::new(JsonlObserverOptions {
+            projects_dir: projects,
+            db_path: db,
+            ..Default::default()
+        });
+        obs.open().unwrap();
+        let snaps = obs.poll_once().unwrap();
+        // Only s2 survives — s1 is soft-deleted.
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].session_id, "s2");
     }
 }

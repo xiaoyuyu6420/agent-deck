@@ -52,6 +52,8 @@ pub fn map_zcode_row(row: &ZcodeRow) -> SessionSnapshot {
         },
         updated_at: row.updated_at,
         workspace_path: row.workspace_path.clone(),
+        project_category: None,
+        project_label: None,
     }
 }
 

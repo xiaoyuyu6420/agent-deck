@@ -4,7 +4,11 @@
 use serde::{Deserialize, Serialize};
 
 pub const SLOT_COUNT: usize = 8;
+/// How long a Done key stays green after the user opens it from Agent Deck.
+/// Unopened Done sessions keep green until `DONE_TTL_UNOPENED_MS` instead.
 pub const DONE_TTL_MS: u64 = 5 * 60 * 1000;
+/// Max time an unopened Done session stays green before forced Idle.
+pub const DONE_TTL_UNOPENED_MS: u64 = 12 * 60 * 60 * 1000;
 pub const URGENCY_FULL_WAIT_MS: u64 = 2 * 60 * 1000;
 pub const WORKING_LONG_MS: u64 = 5 * 60 * 1000;
 
@@ -75,6 +79,19 @@ pub enum PolicyMode {
     Review,
 }
 
+/// Bind-picker grouping for a session's workspace.
+/// WorkBuddy uses all three; other backends typically only set Project (or none).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectCategory {
+    /// Real project folder the user chose (e.g. ~/Desktop/modjing).
+    Project,
+    /// Ad-hoc WorkBuddy "任务" (timestamp folder under ~/WorkBuddy, is_playground).
+    Task,
+    /// Scheduled / background automation runs.
+    Automation,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSnapshot {
@@ -91,6 +108,13 @@ pub struct SessionSnapshot {
     pub updated_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
+    /// Bind-picker section (project / task / automation). Optional for backends
+    /// that don't classify workspaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_category: Option<ProjectCategory>,
+    /// Human label for the bind-picker row (task title, automation name, folder).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
