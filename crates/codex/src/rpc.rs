@@ -25,7 +25,10 @@ pub enum RpcError {
     ProcessExited,
 }
 
-/// Candidate paths for the codex binary (ChatGPT.app embeds it off-PATH).
+/// Candidate paths for the codex binary.
+///
+/// macOS: ChatGPT.app embeds it off-PATH. Linux: Homebrew/manual install.
+/// Windows: ChatGPT desktop install or npm global (codex.exe / codex.cmd).
 pub fn detect_codex_cli() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CODEX_CLI_PATH") {
         let pb = PathBuf::from(p);
@@ -33,19 +36,42 @@ pub fn detect_codex_cli() -> Option<PathBuf> {
             return Some(pb);
         }
     }
-    let candidates = [
-        "/Applications/ChatGPT.app/Contents/Resources/codex",
-        "/usr/local/bin/codex",
-        "/opt/homebrew/bin/codex",
-    ];
+    let candidates: Vec<PathBuf> = if cfg!(target_os = "macos") {
+        vec![
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
+            PathBuf::from("/usr/local/bin/codex"),
+            PathBuf::from("/opt/homebrew/bin/codex"),
+        ]
+    } else if cfg!(target_os = "windows") {
+        let mut cands = vec![
+            // Common ChatGPT desktop install dirs.
+            PathBuf::from(r"C:\Program Files\ChatGPT\resources\codex.exe"),
+            PathBuf::from(r"C:\Program Files\ChatGPT\resources\codex.cmd"),
+        ];
+        // %LOCALAPPDATA%\Programs\ChatGPT\...
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            cands.push(PathBuf::from(&local).join(r"Programs\ChatGPT\resources\codex.exe"));
+        }
+        // npm global bin (e.g. %APPDATA%\npm).
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            cands.push(PathBuf::from(&appdata).join(r"npm\codex.cmd"));
+        }
+        cands
+    } else {
+        // Linux / other Unix.
+        vec![
+            PathBuf::from("/usr/local/bin/codex"),
+            PathBuf::from("/usr/bin/codex"),
+        ]
+    };
     for c in candidates {
-        let p = PathBuf::from(c);
-        if p.is_file() {
-            return Some(p);
+        if c.is_file() {
+            return Some(c);
         }
     }
-    // Fall back to PATH lookup.
-    which("codex")
+    // Fall back to PATH lookup (adds .exe on Windows automatically).
+    let exe_name = if cfg!(target_os = "windows") { "codex.exe" } else { "codex" };
+    which(exe_name)
 }
 
 fn which(name: &str) -> Option<PathBuf> {

@@ -2,7 +2,7 @@
 //! Ported from packages/host/src/backends/zcode/SqliteObserver.ts
 
 use crate::mapper::{map_zcode_row, ZcodeRow};
-use agent_deck_protocol::SessionSnapshot;
+use agent_deck_protocol::{home_dir, SessionSnapshot};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,7 +49,7 @@ pub struct SqliteObserverOptions {
 
 impl Default for SqliteObserverOptions {
     fn default() -> Self {
-        let home = dirs_home();
+        let home = home_dir();
         Self {
             tasks_db_path: home.join(".zcode/v2/tasks-index.sqlite"),
             tool_db_path: home.join(".zcode/cli/db/db.sqlite"),
@@ -58,12 +58,6 @@ impl Default for SqliteObserverOptions {
             fail_on_missing: false,
         }
     }
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub struct SqliteObserver {

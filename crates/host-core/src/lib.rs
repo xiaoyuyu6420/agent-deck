@@ -3,8 +3,8 @@
 
 use agent_deck_board::SessionBoard;
 use agent_deck_protocol::{
-    BackendId, BoardState, DeckStatus, LedFrame, ProjectCategory, SessionSnapshot, DONE_TTL_MS,
-    DONE_TTL_UNOPENED_MS,
+    home_dir, BackendId, BoardState, DeckStatus, LedFrame, ProjectCategory, SessionSnapshot,
+    DONE_TTL_MS, DONE_TTL_UNOPENED_MS,
 };
 use agent_deck_zcode::{SqliteObserver, SqliteObserverOptions};
 use serde::{Deserialize, Serialize};
@@ -243,9 +243,7 @@ pub struct HostConfig {
 
 impl Default for HostConfig {
     fn default() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let home = home_dir();
         Self {
             tasks_db_path: home.join(".zcode/v2/tasks-index.sqlite"),
             tool_db_path: home.join(".zcode/cli/db/db.sqlite"),
@@ -302,9 +300,7 @@ impl HostCore {
                 .workbuddy_projects_dir
                 .clone()
                 .unwrap_or_else(|| {
-                    let home = std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("."));
+                    let home = home_dir();
                     home.join(".workbuddy/projects")
                 });
             let mut workbuddy =
@@ -712,18 +708,12 @@ pub fn now_ms() -> u64 {
 
 /// Default pin persistence path: `~/.agent-deck/pins.json`.
 pub fn default_pins_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".agent-deck/pins.json")
+    home_dir().join(".agent-deck/pins.json")
 }
 
 /// Default settings path: `~/.agent-deck/settings.json`.
 pub fn default_settings_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".agent-deck/settings.json")
+    home_dir().join(".agent-deck/settings.json")
 }
 
 pub fn load_settings(path: &Path) -> DeckSettings {

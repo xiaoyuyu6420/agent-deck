@@ -13,9 +13,7 @@ use agent_deck_workbuddy::{JsonlObserver, JsonlObserverOptions};
 use std::path::PathBuf;
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    agent_deck_protocol::home_dir()
 }
 
 fn real_observer() -> JsonlObserver {

@@ -26,13 +26,21 @@
 //!
 //! ## 降级
 //!
-//! best-effort：GUI 没开 → `status_of` 恒 `None` → observer 回退 `notLoaded`。
+//! best-effort：GUI 没开 → `status_of` 恒 `None` → observer 回退 notLoaded。
 //! 任何协议/解析失败不 panic、不阻塞主流程。
+//!
+//! **跨平台**：Unix domain socket 仅 Unix 可用。`spawn`/`run_loop`/
+//! `connect_and_run`/`announce_following` 及它们调用的纯解析函数在非 Unix
+//! 平台下不编译（Windows 返回 no-op watcher）。`#[allow(dead_code)]` 抑制
+//! 非 Unix 下这些函数「未使用」的告警。
+
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 
 use crate::mapper::ThreadStatus;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,6 +72,12 @@ pub struct IpcStateWatcher {
 
 impl IpcStateWatcher {
     /// 启动后台 watcher。立即返回；连接/announce/解析都在后台线程。
+    ///
+    /// On non-Unix platforms (Windows) the real-time ipc channel (Unix domain
+    /// socket) does not exist, so this returns a no-op watcher whose
+    /// `status_of` always yields `None`. The observer then falls back to the
+    /// static `thread/list` poll.
+    #[cfg(unix)]
     pub fn spawn(socket_path: PathBuf) -> Self {
         let state: Arc<Mutex<HashMap<String, IpcState>>> = Arc::new(Mutex::new(HashMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -78,6 +92,18 @@ impl IpcStateWatcher {
             state,
             stop,
             join: handle,
+        }
+    }
+
+    /// Windows / non-Unix stub: no real-time watcher. `status_of` is always
+    /// `None`; the observer uses `thread/list` polling only.
+    #[cfg(not(unix))]
+    #[allow(clippy::new_without_default)]
+    pub fn spawn(_socket_path: PathBuf) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(HashMap::new())),
+            stop: Arc::new(AtomicBool::new(true)),
+            join: None,
         }
     }
 
@@ -107,6 +133,7 @@ impl Drop for IpcStateWatcher {
     }
 }
 
+#[cfg(unix)]
 fn run_loop(socket_path: PathBuf, state: Arc<Mutex<HashMap<String, IpcState>>>, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
         match connect_and_run(&socket_path, &state, &stop) {
@@ -128,6 +155,7 @@ fn run_loop(socket_path: PathBuf, state: Arc<Mutex<HashMap<String, IpcState>>>, 
     }
 }
 
+#[cfg(unix)]
 fn connect_and_run(
     socket_path: &Path,
     state: &Mutex<HashMap<String, IpcState>>,
@@ -250,6 +278,7 @@ fn connect_and_run(
 }
 
 /// 主动广播 following=true，让 owner 把我们登记为 stream follower。
+#[cfg(unix)]
 fn announce_following(
     stream: &mut UnixStream,
     client_id: &str,
@@ -622,8 +651,7 @@ pub fn default_socket_path() -> PathBuf {
         .ok()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".codex")))
-        .unwrap_or_else(|| PathBuf::from("/.codex"));
+        .unwrap_or_else(|| agent_deck_protocol::home_dir().join(".codex"));
     codex_home.join("ipc").join("ipc.sock")
 }
 

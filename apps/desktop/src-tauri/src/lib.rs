@@ -1,7 +1,6 @@
 use agent_deck_host_core::{DesktopService, HostConfig, SessionInfo};
-use agent_deck_protocol::{BackendId, BoardState, LedFrame};
+use agent_deck_protocol::{home_dir, BackendId, BoardState, LedFrame};
 use serde::Serialize;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -31,9 +30,7 @@ struct SettingsView {
 }
 
 fn default_config() -> HostConfig {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let home = home_dir();
     // Do NOT exclude the current repo — user may want to bind its sessions.
     HostConfig {
         tasks_db_path: home.join(".zcode/v2/tasks-index.sqlite"),
@@ -150,19 +147,12 @@ fn open_zcode_session(
         if !path.is_empty() && path != "(unknown project)" {
             let encoded = url_encode_path(path);
             let url = format!("zcode://workspace/open?path={encoded}");
-            Command::new("open")
-                .arg(&url)
-                .status()
-                .map_err(|e| format!("open ZCode workspace failed: {e}"))?;
+            open_url(&url).map_err(|e| format!("open ZCode workspace failed: {e}"))?;
             return Ok(());
         }
     }
     // No workspace known — just activate/focus the existing ZCode window.
-    Command::new("open")
-        .arg("-a")
-        .arg("ZCode")
-        .status()
-        .map_err(|e| format!("open ZCode failed: {e}"))?;
+    launch_app("ZCode").map_err(|e| format!("open ZCode failed: {e}"))?;
     Ok(())
 }
 
@@ -216,16 +206,17 @@ fn open_codex_session(
     // to the exact thread reliably and repeatably (verified across two distinct
     // thread ids). Fix: on cold start, bring the app up first and wait for its
     // main process to be ready, THEN dispatch the deep link.
-    if !chatgpt_app_running() {
+    if !app_running("ChatGPT.app/Contents/MacOS/ChatGPT") {
         // Launch without a URL so the app reaches its ready state, then wait.
-        let _ = Command::new("open").arg("-a").arg("ChatGPT").status();
+        // On Windows the pattern is the exe name.
+        #[cfg(target_os = "macos")]
+        let _ = launch_app("ChatGPT");
+        #[cfg(not(target_os = "macos"))]
+        let _ = launch_app("ChatGPT");
         wait_for_chatgpt_ready();
     }
     let url = format!("codex://threads/{session_id}");
-    Command::new("open")
-        .arg(&url)
-        .status()
-        .map_err(|e| format!("open codex thread failed: {e}"))?;
+    open_url(&url).map_err(|e| format!("open codex thread failed: {e}"))?;
     Ok(())
 }
 
@@ -233,13 +224,13 @@ fn open_codex_session(
 /// from the bundled `codex app-server` child (which has a different exec path
 /// under Contents/Resources).
 fn chatgpt_app_running() -> bool {
-    Command::new("pgrep")
-        .args(["-f", "ChatGPT.app/Contents/MacOS/ChatGPT"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    // macOS matches the .app bundle exec path; Windows matches the exe name.
+    let pattern = if cfg!(target_os = "macos") {
+        "ChatGPT.app/Contents/MacOS/ChatGPT"
+    } else {
+        "ChatGPT.exe"
+    };
+    app_running(pattern)
 }
 
 /// Poll for the ChatGPT.app main process to appear (cold-start readiness).
@@ -274,14 +265,11 @@ fn open_workbuddy_session(
     // app first, wait for the main Electron process, then dispatch the URL so
     // the first paint has a better chance of landing on /task/<id>.
     if !workbuddy_app_running() {
-        let _ = Command::new("open").arg("-a").arg("WorkBuddy").status();
+        let _ = launch_app("WorkBuddy");
         wait_for_workbuddy_ready();
     }
     let url = format!("workbuddy://chat/{session_id}");
-    Command::new("open")
-        .arg(&url)
-        .status()
-        .map_err(|e| format!("open WorkBuddy task failed: {e}"))?;
+    open_url(&url).map_err(|e| format!("open WorkBuddy task failed: {e}"))?;
     Ok(())
 }
 
@@ -291,13 +279,12 @@ fn open_workbuddy_session(
 /// Electron). Child daemons also use that path with extra args, but presence of
 /// any WorkBuddy.app process is enough for "app is up" warm-up purposes.
 fn workbuddy_app_running() -> bool {
-    Command::new("pgrep")
-        .args(["-f", "WorkBuddy.app/Contents/MacOS"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let pattern = if cfg!(target_os = "macos") {
+        "WorkBuddy.app/Contents/MacOS"
+    } else {
+        "WorkBuddy.exe"
+    };
+    app_running(pattern)
 }
 
 fn wait_for_workbuddy_ready() {
@@ -310,6 +297,87 @@ fn wait_for_workbuddy_ready() {
     }
 }
 
+// ─── 平台分派：打开 URL / 启动 App / 检测进程 ─────────────────────────────
+//
+// macOS 用 `open(1)`；Linux 用 `xdg-open`；Windows 用 `cmd /C start`。
+// 进程检测：macOS/Linux 用 `pgrep -f`，Windows 用 `tasklist`。
+
+/// Dispatch a URL (incl. custom scheme like `codex://`, `workbuddy://`,
+/// `zcode://`) to the OS handler. Non-fatal: returns Ok even if the handler
+/// isn't registered (the app simply won't come up).
+fn open_url(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).status().map(|_| ())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `start "" <url>` — the empty title arg is required so the URL itself
+        // isn't mistaken for a window title.
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .status()
+            .map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(url).status().map(|_| ())
+    }
+}
+
+/// Launch / focus an installed app by name (no URL). macOS uses
+/// `open -a <app>`; Windows launches by exe name; Linux best-effort.
+fn launch_app(app: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").args(["-a", app]).status().map(|_| ())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Best-effort: app.exe on PATH or registered App Paths.
+        Command::new("cmd")
+            .args(["/C", "start", "", &format!("{app}.exe")])
+            .status()
+            .map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+/// Whether *any* process matching `pattern` is running.
+///
+/// - macOS/Linux: `pgrep -f <pattern>` (pattern is a substring of the cmdline).
+/// - Windows: `tasklist` filtered by image name; `pattern` should be an exe
+///   name like `"ChatGPT.exe"`. We check stdout for the image name.
+fn app_running(pattern: &str) -> bool {
+    #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+    {
+        Command::new("pgrep")
+            .args(["-f", pattern])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {pattern}"), "/FO", "CSV", "/NH"])
+            .output();
+        match output {
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                stdout.contains(pattern)
+            }
+            Err(_) => false,
+        }
+    }
+}
+
 /// Open an arbitrary URL/path via system `open(1)`.
 ///
 /// Currently unused (the codex path switched to a `codex://threads/...` deep
@@ -318,11 +386,8 @@ fn wait_for_workbuddy_ready() {
 /// registered).
 #[allow(dead_code)]
 fn open_external(_app: &AppHandle, url: &str) -> Result<(), String> {
-    // Use system open(1). Avoid tauri-plugin-shell::open (deprecated → opener).
-    Command::new("open")
-        .arg(url)
-        .status()
-        .map_err(|e| format!("open(1) failed: {e}"))?;
+    // Delegate to the platform-aware helper instead of raw `open(1)`.
+    open_url(url).map_err(|e| format!("open failed: {e}"))?;
     Ok(())
 }
 
@@ -570,6 +635,7 @@ pub fn run() {
             // macOS: clicking the Dock icon when the window is hidden/minimized
             // fires RunEvent::Reopen. Bring the panel back so the user always
             // has a way to surface the window.
+            #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 show_main_window(app_handle);
             }

@@ -12,9 +12,7 @@ use agent_deck_host_core::{HostConfig, HostCore};
 use std::path::PathBuf;
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    agent_deck_protocol::home_dir()
 }
 
 fn real_config(slot_count: usize) -> HostConfig {

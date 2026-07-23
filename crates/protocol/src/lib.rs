@@ -12,6 +12,19 @@ pub const DONE_TTL_UNOPENED_MS: u64 = 12 * 60 * 60 * 1000;
 pub const URGENCY_FULL_WAIT_MS: u64 = 2 * 60 * 1000;
 pub const WORKING_LONG_MS: u64 = 5 * 60 * 1000;
 
+/// Cross-platform user home directory.
+///
+/// Priority: `HOME` (macOS/Linux/mingw) → `USERPROFILE` (Windows) → `"."`.
+/// On Windows `HOME` is usually unset, so without this fallback every
+/// `~/.zcode` / `~/.workbuddy` / `~/.codex` / `~/.agent-deck` path would
+/// resolve to the current working directory.
+pub fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendId {

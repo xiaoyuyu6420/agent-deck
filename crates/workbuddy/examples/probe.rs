@@ -10,10 +10,7 @@ use std::path::PathBuf;
 fn main() {
     println!("=== WorkBuddy backend e2e 探针 ===\n");
 
-    let projects_dir = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|h| h.join(".workbuddy/projects"))
-        .expect("HOME unset");
+    let projects_dir = agent_deck_protocol::home_dir().join(".workbuddy/projects");
     println!("数据源: {}", projects_dir.display());
     println!(
         "目录存在: {}",

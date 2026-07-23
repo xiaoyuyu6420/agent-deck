@@ -54,7 +54,7 @@ pub struct JsonlObserverOptions {
 
 impl Default for JsonlObserverOptions {
     fn default() -> Self {
-        let home = dirs_home();
+        let home = agent_deck_protocol::home_dir();
         Self {
             projects_dir: home.join(".workbuddy/projects"),
             db_path: home.join(".workbuddy/workbuddy.db"),
@@ -65,12 +65,6 @@ impl Default for JsonlObserverOptions {
             catalog_max_sessions: 500,
         }
     }
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub struct JsonlObserver {

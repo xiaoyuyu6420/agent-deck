@@ -24,6 +24,9 @@ pub struct CodexObserverOptions {
     /// observe real-time thread status (working/waiting). When the GUI isn't
     /// running, the watcher stays disconnected and `thread/list`'s static
     /// `notLoaded` status is used as-is (i.e. the pre-ipc behaviour).
+    ///
+    /// Defaults to `true` on Unix (macOS/Linux); `false` on Windows where the
+    /// Unix domain socket channel is unavailable.
     pub enable_ipc: bool,
 }
 
@@ -36,7 +39,7 @@ impl Default for CodexObserverOptions {
             catalog_max_threads: 200,
             // Keep a much longer history window for manual bind.
             catalog_recency_window_secs: 90 * 24 * 60 * 60,
-            enable_ipc: true,
+            enable_ipc: cfg!(unix),
         }
     }
 }
