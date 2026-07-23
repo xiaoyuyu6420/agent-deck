@@ -234,3 +234,62 @@ fn focus_marks_slot_and_persists_across_tick() {
     assert_eq!(host.board_state().unwrap().focus, 1);
     assert_eq!(host.board_state().unwrap().slots[1].focused, Some(true));
 }
+
+/// Regression for "binding a session then its state never updates".
+///
+/// A pinned session must keep reflecting its latest DB state even after it
+/// falls outside `poll()`'s recent-20 active window. Before the fix the board
+/// cached the bind-time snapshot forever (status frozen at Working); after the
+/// fix `tick_at` re-queries pinned ids each cycle via `poll_pinned` and
+/// overrides the stale row.
+#[test]
+fn pinned_session_state_updates_outside_poll_window() {
+    let fx = Fixture::new();
+    let t = now_ms();
+    // The session we'll bind.
+    fx.insert_task("pinned", "running", t);
+    // Fill the active window with 25 newer running tasks so "pinned" is
+    // pushed past poll()'s LIMIT 20 and would drop out of the active set.
+    for i in 0..25 {
+        fx.insert_task(&format!("noise{i}"), "running", t + 100 + i as u64);
+    }
+
+    let mut host = fx.host();
+    host.tick_at(t + 200).unwrap();
+
+    // Bind "pinned" to slot 0 from the catalog (it's outside the active poll
+    // window now, so this exercises the catalog-resolve path too).
+    host.pin_session_from_catalog(0, Some("pinned".to_string()));
+
+    // Sanity: it shows up, working.
+    let slot_status = |h: &HostCore| {
+        h.board_state()
+            .unwrap()
+            .slots
+            .iter()
+            .find(|s| s.i == 0)
+            .map(|s| s.status)
+    };
+    assert_eq!(slot_status(&host), Some(DeckStatus::Working));
+
+    // Now the task actually completes in the DB — but keep its updated_at OLD
+    // (t) so it stays past poll()'s LIMIT-20-by-recency window. Only
+    // poll_pinned (id lookup, no limit) can see the new status.
+    fx.tasks_db
+        .execute(
+            "UPDATE tasks SET task_status = 'completed' WHERE task_id = 'pinned'",
+            [],
+        )
+        .unwrap();
+
+    // tick again — before the fix, "pinned" stayed Working (frozen, because it
+    // was outside poll()'s window and the cached snapshot was reused as-is).
+    // After the fix, poll_pinned re-reads it by id and overrides the stale
+    // snapshot to Done.
+    host.tick_at(t + 500).unwrap();
+    assert_eq!(
+        slot_status(&host),
+        Some(DeckStatus::Done),
+        "pinned session must track its real DB state, not the bind-time snapshot"
+    );
+}

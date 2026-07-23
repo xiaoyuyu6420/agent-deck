@@ -56,6 +56,20 @@ pub trait BackendObserver: Send {
     fn list_catalog(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
         self.poll()
     }
+    /// Fetch the *latest* state of the given session ids, bypassing the active
+    /// poll window / status filter / LIMIT. Used to keep manually pinned
+    /// sessions live even when they fall outside `poll()`'s recent-20 window.
+    ///
+    /// Each observer only returns rows it actually has (so callers can safely
+    /// pass ids belonging to other backends — they just won't match). Default
+    /// falls back to filtering `poll()` by id, which preserves old behavior.
+    fn poll_pinned(&mut self, ids: &[String]) -> anyhow::Result<Vec<SessionSnapshot>> {
+        let snaps = self.poll()?;
+        Ok(snaps
+            .into_iter()
+            .filter(|s| ids.iter().any(|id| id == &s.session_id))
+            .collect())
+    }
 }
 
 impl BackendObserver for SqliteObserver {
@@ -70,6 +84,10 @@ impl BackendObserver for SqliteObserver {
     fn list_catalog(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
         Ok(self.catalog_once()?)
     }
+
+    fn poll_pinned(&mut self, ids: &[String]) -> anyhow::Result<Vec<SessionSnapshot>> {
+        Ok(self.poll_pinned_once(ids)?)
+    }
 }
 
 impl BackendObserver for agent_deck_codex::CodexObserver {
@@ -83,6 +101,10 @@ impl BackendObserver for agent_deck_codex::CodexObserver {
 
     fn list_catalog(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
         Ok(self.catalog_once()?)
+    }
+
+    fn poll_pinned(&mut self, ids: &[String]) -> anyhow::Result<Vec<SessionSnapshot>> {
+        Ok(self.poll_pinned_once(ids)?)
     }
 }
 
@@ -166,6 +188,10 @@ impl HostCore {
 
     /// Poll all backends once and recompute board using an injected clock (for tests).
     pub fn tick_at(&mut self, now: u64) -> anyhow::Result<(Option<LedFrame>, Option<BoardState>)> {
+        // Snapshot the current pinned ids up-front (before any recompute) so we
+        // can refresh them outside the active poll window.
+        let pinned_ids: Vec<String> = self.board.pins().values().cloned().collect();
+
         for obs in &mut self.observers {
             // One backend failing must not block the others.
             match obs.poll() {
@@ -173,6 +199,17 @@ impl HostCore {
                     self.board.replace_backend_sessions(obs.id(), snaps, now);
                 }
                 Err(_) => continue,
+            }
+            // Refresh pinned sessions' latest state even if they fell out of
+            // poll()'s recent-20 window. poll_pinned only returns rows this
+            // backend actually owns, so it's safe to call with all ids.
+            // Batched upsert recomputes once, overriding any stale cached row
+            // for a bound id with fresh state — this is what keeps a bound key
+            // live instead of frozen at its bind-time snapshot.
+            if !pinned_ids.is_empty() {
+                if let Ok(pinned_snaps) = obs.poll_pinned(&pinned_ids) {
+                    self.board.upsert_sessions(pinned_snaps, now);
+                }
             }
         }
         Ok((

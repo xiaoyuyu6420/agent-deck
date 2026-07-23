@@ -86,6 +86,25 @@ impl CodexObserver {
         )
     }
 
+    /// Latest state of pinned threads by id. The codex app-server has no
+    /// per-id query, so we pull the long-window catalog (no status filter,
+    /// no board-poll truncation) and filter by id client-side. Threads not
+    /// present in the result are simply absent (caller keeps last-known).
+    pub fn poll_pinned_once(&mut self, ids: &[String]) -> Result<Vec<SessionSnapshot>, RpcError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let snaps = self.fetch_threads(
+            self.opts.catalog_recency_window_secs,
+            self.opts.catalog_max_threads,
+            /*keep_idle=*/ true,
+        )?;
+        Ok(snaps
+            .into_iter()
+            .filter(|s| ids.iter().any(|id| id == &s.session_id))
+            .collect())
+    }
+
     pub fn last_snapshots(&self) -> &[SessionSnapshot] {
         &self.last_snapshots
     }

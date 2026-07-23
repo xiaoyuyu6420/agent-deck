@@ -1,7 +1,7 @@
 //! Pure slot allocation algorithm.
 //! Ported from packages/host/src/board/slotAllocator.ts
 
-use agent_deck_protocol::{DeckStatus, SessionSnapshot, DONE_TTL_MS, SLOT_COUNT};
+use agent_deck_protocol::{SessionSnapshot, SLOT_COUNT};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -32,11 +32,6 @@ pub struct AllocatedSlot {
     pub i: usize,
     pub session: Option<ScoredSession>,
     pub pinned: bool,
-}
-
-fn is_expired_done(session: &ScoredSession, now: u64) -> bool {
-    session.snapshot.status == DeckStatus::Done
-        && now.saturating_sub(session.snapshot.updated_at) > DONE_TTL_MS
 }
 
 fn compare_sessions(a: &ScoredSession, b: &ScoredSession) -> std::cmp::Ordering {
@@ -83,10 +78,13 @@ pub fn allocate_slots(
         }
     }
 
+    // Done sessions are NOT purged by age anymore — users want completed
+    // sessions to remain visible (green) until displaced by something more
+    // active. compare_sessions already ranks Done lowest priority, so active
+    // sessions always take precedence and Done only fills leftover slots.
     let mut remaining: Vec<ScoredSession> = by_id
         .into_values()
         .filter(|s| !pinned_session_ids.contains(&s.snapshot.session_id))
-        .filter(|s| !is_expired_done(s, now))
         .collect();
     remaining.sort_by(compare_sessions);
 
@@ -103,6 +101,9 @@ pub fn allocate_slots(
     }
 
     let _ = opts.focus;
+    // `now` is accepted for API stability / future time-based scoring but is
+    // not currently used (age-based done purging was removed).
+    let _ = now;
     slots
 }
 
@@ -146,11 +147,35 @@ mod tests {
     }
 
     #[test]
-    fn expired_done_is_dropped() {
+    fn done_is_kept_but_lowest_priority() {
+        // Done sessions are no longer purged by age — they stay visible. But
+        // they rank below any active session, so an active one displaces them
+        // to a later slot.
+        let sessions = vec![
+            snap("active", DeckStatus::Working, 100),
+            snap("old_done", DeckStatus::Done, 0),
+        ];
+        let slots = allocate_slots(&sessions, &SlotAllocatorOptions::default(), 1000);
+        assert_eq!(
+            slots[0].session.as_ref().unwrap().snapshot.session_id,
+            "active"
+        );
+        assert_eq!(
+            slots[1].session.as_ref().unwrap().snapshot.session_id,
+            "old_done"
+        );
+    }
+
+    #[test]
+    fn done_alone_still_shown() {
+        // A lone Done session (even very old) must still appear — it is not
+        // auto-purged anymore.
         let sessions = vec![snap("old", DeckStatus::Done, 0)];
-        let now = DONE_TTL_MS + 1;
-        let slots = allocate_slots(&sessions, &SlotAllocatorOptions::default(), now);
-        assert!(slots.iter().all(|s| s.session.is_none()));
+        let slots = allocate_slots(&sessions, &SlotAllocatorOptions::default(), 9_999_999);
+        assert_eq!(
+            slots[0].session.as_ref().unwrap().snapshot.session_id,
+            "old"
+        );
     }
 
     #[test]

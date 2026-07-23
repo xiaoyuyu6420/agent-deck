@@ -5,7 +5,7 @@ use crate::slot_allocator::{allocate_slots, AllocatedSlot, ScoredSession, SlotAl
 use crate::theme::{paint, ThemeInput, ThemePalette, CODEX_THEME};
 use agent_deck_protocol::{
     BackendId, BoardState, DeckStatus, LedFrame, LedSlot, PolicyMode, SessionSnapshot, SlotBinding,
-    DONE_TTL_MS, SLOT_COUNT,
+    SLOT_COUNT,
 };
 use std::collections::HashMap;
 
@@ -71,6 +71,20 @@ impl SessionBoard {
     pub fn upsert_session(&mut self, snapshot: SessionSnapshot, now: u64) {
         let k = Self::key(snapshot.backend, &snapshot.session_id);
         self.sessions.insert(k, snapshot);
+        self.recompute(now);
+    }
+
+    /// Insert/replace many snapshots at once, recomputing only once at the end.
+    /// Used by the pinned-refresh path in `tick_at` to override stale cached
+    /// rows with fresh state for bound sessions.
+    pub fn upsert_sessions(&mut self, snapshots: Vec<SessionSnapshot>, now: u64) {
+        if snapshots.is_empty() {
+            return;
+        }
+        for snap in snapshots {
+            let k = Self::key(snap.backend, &snap.session_id);
+            self.sessions.insert(k, snap);
+        }
         self.recompute(now);
     }
 
@@ -162,13 +176,19 @@ impl SessionBoard {
     }
 
     pub fn recompute(&mut self, now: u64) {
-        // purge expired done — but never drop a manually pinned session
+        // Done sessions are no longer purged by age — users want completed
+        // sessions to stay visible. The slot allocator ranks Done lowest, so
+        // active sessions always take precedence and Done only fills leftover
+        // slots. (Pinned sessions are of course never dropped.)
+        let _ = now;
         let pinned_ids: std::collections::HashSet<String> = self.pins.values().cloned().collect();
         self.sessions.retain(|_, s| {
             if pinned_ids.contains(&s.session_id) {
                 return true;
             }
-            !(s.status == DeckStatus::Done && now.saturating_sub(s.updated_at) > DONE_TTL_MS)
+            // Only drop sessions that the backend itself stopped reporting
+            // (handled by replace_backend_sessions); keep everything we have.
+            true
         });
 
         let scored: Vec<ScoredSession> = self
