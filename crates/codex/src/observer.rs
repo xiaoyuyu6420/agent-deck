@@ -1,10 +1,12 @@
 //! Poll codex app-server for thread list → SessionSnapshot.
 
-use crate::mapper::{map_thread, CodexThread};
+use crate::ipc::{default_socket_path, IpcStateWatcher};
+use crate::mapper::{map_status, map_thread, CodexThread};
 use crate::rpc::{detect_codex_cli, JsonRpcClient, RpcError};
-use agent_deck_protocol::SessionSnapshot;
+use agent_deck_protocol::{DeckStatus, SessionSnapshot};
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,11 @@ pub struct CodexObserverOptions {
     pub catalog_max_threads: usize,
     /// Recency window for catalog idle/history threads (seconds).
     pub catalog_recency_window_secs: u64,
+    /// Connect to the ChatGPT.app GUI IpcRouter (`~/.codex/ipc/ipc.sock`) to
+    /// observe real-time thread status (working/waiting). When the GUI isn't
+    /// running, the watcher stays disconnected and `thread/list`'s static
+    /// `notLoaded` status is used as-is (i.e. the pre-ipc behaviour).
+    pub enable_ipc: bool,
 }
 
 impl Default for CodexObserverOptions {
@@ -29,6 +36,7 @@ impl Default for CodexObserverOptions {
             catalog_max_threads: 200,
             // Keep a much longer history window for manual bind.
             catalog_recency_window_secs: 90 * 24 * 60 * 60,
+            enable_ipc: true,
         }
     }
 }
@@ -36,6 +44,9 @@ impl Default for CodexObserverOptions {
 pub struct CodexObserver {
     opts: CodexObserverOptions,
     client: Option<JsonRpcClient>,
+    /// Real-time status watcher for the ChatGPT.app GUI (best-effort; None when
+    /// disabled or not yet started).
+    ipc: Option<Arc<IpcStateWatcher>>,
     last_snapshots: Vec<SessionSnapshot>,
     open_failed: bool,
 }
@@ -45,12 +56,21 @@ impl CodexObserver {
         Self {
             opts,
             client: None,
+            ipc: None,
             last_snapshots: vec![],
             open_failed: false,
         }
     }
 
     pub fn open(&mut self) -> Result<(), RpcError> {
+        // Best-effort: start the ipc watcher alongside the app-server client.
+        // The watcher runs in a background thread and reconnects on its own; a
+        // missing socket (GUI not running) is a normal degraded state, not an
+        // error.
+        if self.ipc.is_none() && self.opts.enable_ipc {
+            self.ipc = Some(Arc::new(IpcStateWatcher::spawn(default_socket_path())));
+        }
+
         if self.client.is_some() {
             return Ok(());
         }
@@ -161,6 +181,11 @@ impl CodexObserver {
             })
         });
 
+        // Map threads → snapshots, overlaying real-time status from the ipc
+        // watcher when available. The overlay runs BEFORE the idle filter so a
+        // thread that is notLoaded in thread/list but actually working in the
+        // GUI (seen via ipc) is not dropped from the board.
+        let ipc = self.ipc.clone();
         let snaps: Vec<SessionSnapshot> = threads
             .iter()
             .filter(|t| {
@@ -175,17 +200,34 @@ impl CodexObserver {
                 }
             })
             .take(max_threads)
-            .map(map_thread)
+            .map(|t| {
+                let mut s = map_thread(t);
+                if let Some(ref watcher) = ipc {
+                    if let Some(live) = watcher.status_of(&s.session_id) {
+                        let mapped = map_status(&live);
+                        // Only overlay non-idle real-time states: a working/waiting
+                        // thread must surface even though thread/list said
+                        // notLoaded. An idle live-state would lose information
+                        // relative to the (possibly just-completed) map result,
+                        // so keep the mapped status in that case.
+                        if mapped != DeckStatus::Idle {
+                            s.status = mapped;
+                            s.waiting_since = if s.status == DeckStatus::Waiting {
+                                Some(s.updated_at)
+                            } else {
+                                None
+                            };
+                        }
+                    }
+                }
+                s
+            })
             .filter(|s| {
                 if keep_idle {
                     true
                 } else {
                     // Board poll: drop pure Idle so they don't fill slots.
-                    !matches!(
-                        s.status,
-                        agent_deck_protocol::DeckStatus::Idle
-                            | agent_deck_protocol::DeckStatus::Off
-                    )
+                    !matches!(s.status, DeckStatus::Idle | DeckStatus::Off)
                 }
             })
             .collect();

@@ -80,7 +80,7 @@ pub fn map_thread(t: &CodexThread) -> SessionSnapshot {
     }
 }
 
-fn map_status(status: &ThreadStatus) -> DeckStatus {
+pub fn map_status(status: &ThreadStatus) -> DeckStatus {
     match status {
         ThreadStatus::SystemError => DeckStatus::Error,
         ThreadStatus::Active { active_flags } => {
