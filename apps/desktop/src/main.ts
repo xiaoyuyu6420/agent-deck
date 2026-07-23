@@ -351,9 +351,58 @@ function paintKeyboard(board: BoardState, leds: LedFrame) {
   app.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const action = btn.dataset.action!
-      await invoke('dispatch_action', { action })
+      btn.classList.add('firing')
+      try {
+        const result = await invoke<string>('dispatch_action', { action })
+        flashActionResult(action, result)
+      } catch (err) {
+        flashActionResult(action, `error:${String(err)}`)
+      } finally {
+        setTimeout(() => btn.classList.remove('firing'), 220)
+      }
     })
   })
+}
+
+/** 把后端返回的 ok:/unsupported:/error: 状态字符串翻译成一句话提示。 */
+function flashActionResult(action: string, result: string): void {
+  const label = { accept: 'OK', reject: 'NO', stop: 'STP' }[action] ?? action.toUpperCase()
+  let msg: string
+  if (result.startsWith('ok:')) {
+    msg = `${label} 已发出`
+  } else if (result.includes(':no_target') || result.includes(':empty_slot')) {
+    msg = `${label}：当前焦点无会话`
+  } else if (result.includes(':no_request_id')) {
+    msg = `${label}：暂不支持（需捕获 requestId）`
+  } else if (result.startsWith('unsupported:')) {
+    msg = `${label}：该后端暂不支持`
+  } else if (result.startsWith('error:')) {
+    msg = `${label} 失败：${result.slice(6)}`
+  } else {
+    msg = `${label}：${result}`
+  }
+  showToast(msg)
+}
+
+/** 轻量 toast：固定定位，2 秒后淡出。多次触发会替换。 */
+function showToast(msg: string): void {
+  let toast = document.getElementById('action-toast')
+  if (!toast) {
+    toast = document.createElement('div')
+    toast.id = 'action-toast'
+    toast.className = 'action-toast'
+    document.body.appendChild(toast)
+  }
+  toast.textContent = msg
+  toast.classList.remove('fade-out')
+  // restart animation
+  void toast.offsetWidth
+  toast.classList.add('show')
+  clearTimeout((toast as HTMLElement & { _t?: number })._t)
+  ;(toast as HTMLElement & { _t?: number })._t = window.setTimeout(() => {
+    toast?.classList.add('fade-out')
+    setTimeout(() => toast?.classList.remove('show', 'fade-out'), 300)
+  }, 1800)
 }
 
 function paintSettings() {

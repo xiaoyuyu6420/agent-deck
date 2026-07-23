@@ -231,6 +231,26 @@ pub enum Action {
     },
 }
 
+impl Action {
+    /// Return the wire tag of this action: "accept" / "reject" / "stop" /
+    /// "stop_all" / "freeze_all" / "unfreeze" / "set_mode" / "send" / "focus"
+    /// / "pin". Used for `unsupported:{tag}` status strings and logging.
+    pub fn op_tag(&self) -> &'static str {
+        match self {
+            Action::Accept { .. } => "accept",
+            Action::Reject { .. } => "reject",
+            Action::Stop { .. } => "stop",
+            Action::StopAll => "stop_all",
+            Action::FreezeAll => "freeze_all",
+            Action::Unfreeze => "unfreeze",
+            Action::SetMode { .. } => "set_mode",
+            Action::Send { .. } => "send",
+            Action::Focus { .. } => "focus",
+            Action::Pin { .. } => "pin",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +267,20 @@ mod tests {
         assert_eq!(Risk::Low.boost(), 0.0);
         assert_eq!(Risk::Medium.boost(), 0.25);
         assert_eq!(Risk::High.boost(), 0.5);
+    }
+
+    #[test]
+    fn op_tag_covers_all_variants() {
+        use Action::*;
+        assert_eq!(Accept { i: None }.op_tag(), "accept");
+        assert_eq!(Reject { i: None }.op_tag(), "reject");
+        assert_eq!(Stop { i: None }.op_tag(), "stop");
+        assert_eq!(StopAll.op_tag(), "stop_all");
+        assert_eq!(FreezeAll.op_tag(), "freeze_all");
+        assert_eq!(Unfreeze.op_tag(), "unfreeze");
+        assert_eq!(SetMode { mode: PolicyMode::Act }.op_tag(), "set_mode");
+        assert_eq!(Send { i: None, text: "".into() }.op_tag(), "send");
+        assert_eq!(Focus { i: 0 }.op_tag(), "focus");
+        assert_eq!(Pin { i: 0, session_id: None }.op_tag(), "pin");
     }
 }

@@ -466,7 +466,7 @@ fn start_dragging(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn dispatch_action(state: State<'_, Arc<AppState>>, action: String) -> Result<String, String> {
-    let service = state.service.lock().map_err(|e| e.to_string())?;
+    let mut service = state.service.lock().map_err(|e| e.to_string())?;
     Ok(service.dispatch_action(&action))
 }
 

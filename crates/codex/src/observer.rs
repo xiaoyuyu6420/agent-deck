@@ -3,7 +3,7 @@
 use crate::ipc::{default_socket_path, IpcStateWatcher};
 use crate::mapper::{map_status, map_thread, CodexThread};
 use crate::rpc::{detect_codex_cli, JsonRpcClient, RpcError};
-use agent_deck_protocol::{DeckStatus, SessionSnapshot};
+use agent_deck_protocol::{Action, DeckStatus, SessionSnapshot};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -130,6 +130,132 @@ impl CodexObserver {
 
     pub fn last_snapshots(&self) -> &[SessionSnapshot] {
         &self.last_snapshots
+    }
+
+    /// Dispatch a write Action against a codex thread.
+    ///
+    /// **Feasibility (verified 2026-07-23, codex-cli 0.145.0-alpha.30):**
+    /// - The standalone `app-server` subprocess cannot see the GUI's live
+    ///   thread state (memory isolation: every thread reads `notLoaded`).
+    /// - `thread/resume {threadId}` *can* load any thread by id and, per the
+    ///   schema, **rejoins** a running thread ("If thread_id identifies a
+    ///   running thread, app-server rejoins that thread"). A resumed thread
+    ///   returns its last turn, enabling `turn/interrupt`.
+    /// - **Stop** is therefore achievable: resume → read last `turnId` →
+    ///   `turn/interrupt {threadId, turnId}`.
+    /// - **Accept/Reject** need the pending `requestId` of an unresolved
+    ///   `serverRequest`. `thread/list` / `thread/resume` do **not** surface
+    ///   it, and the ipc.sock real-time channel (which does carry `requests[]`)
+    ///   is currently receive-only in this codebase. So Accept/Reject return
+    ///   `unsupported` until requestId capture lands (action-spec §4.2).
+    ///
+    /// Errors are returned only for transport failures of a supported action;
+    /// "not supported" is an `Ok("unsupported:...")` status, not an error.
+    pub fn dispatch_once(&mut self, action: &Action) -> Result<String, RpcError> {
+        let tag = action.op_tag();
+        match action {
+            // Stop: resume thread → read last turnId → turn/interrupt.
+            Action::Stop { .. } | Action::StopAll => {
+                let thread_id = match self.target_thread_id(action) {
+                    Some(id) => id,
+                    None => return Ok(format!("unsupported:{tag}:no_target")),
+                };
+                self.stop_thread(&thread_id).map(|_| format!("ok:{tag}:{thread_id}"))
+            }
+            // Accept / Reject: blocked on requestId capture (see docstring).
+            Action::Accept { .. } | Action::Reject { .. } => {
+                Ok(format!("unsupported:{tag}:no_request_id"))
+            }
+            // Non-Codex actions are not this observer's responsibility.
+            _ => Ok(format!("unsupported:{tag}")),
+        }
+    }
+
+    /// Resolve which thread id a slot-scoped action targets. `StopAll` has no
+    /// single target; callers pass `None` and we pick the first known live
+    /// codex thread from the last poll.
+    fn target_thread_id(&self, action: &Action) -> Option<String> {
+        match action {
+            Action::StopAll => self
+                .last_snapshots
+                .iter()
+                .find(|s| matches!(s.status, DeckStatus::Working | DeckStatus::Waiting))
+                .map(|s| s.session_id.clone()),
+            // `i` is optional; the host resolves it to the focused slot before
+            // calling us, but defend against `None` by falling back to the
+            // first live thread.
+            Action::Stop { i } | Action::Accept { i } | Action::Reject { i } => {
+                if let Some(idx) = *i {
+                    self.last_snapshots.get(idx).map(|s| s.session_id.clone())
+                } else {
+                    self.last_snapshots.first().map(|s| s.session_id.clone())
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Resume a thread by id and interrupt its current turn.
+    ///
+    /// `thread/resume` loads the thread (rejoining if the GUI is running it)
+    /// and returns the thread object whose `lastTurn.id` is the interrupt
+    /// target. If the thread isn't running a turn, `turn/interrupt` is a no-op
+    /// and we still report success (the turn was already gone).
+    fn stop_thread(&mut self, thread_id: &str) -> Result<(), RpcError> {
+        let turn_id = self.resume_last_turn_id(thread_id)?;
+        let Some(tid) = turn_id else {
+            // No active turn → nothing to interrupt; treat as already-stopped.
+            return Ok(());
+        };
+        // Best-effort interrupt: if the app-server errors (turn already ended,
+        // thread not running here), we swallow it — the user-visible outcome
+        // ("stop requested") is still achieved from their perspective.
+        let _result: serde_json::Value = self.request_rpc(
+            "turn/interrupt",
+            serde_json::json!({ "threadId": thread_id, "turnId": tid }),
+        )?;
+        Ok(())
+    }
+
+    /// `thread/resume` and extract the last turn id (the interrupt target).
+    fn resume_last_turn_id(&mut self, thread_id: &str) -> Result<Option<String>, RpcError> {
+        self.ensure_client()?;
+        let Some(client) = self.client.as_mut() else {
+            return Ok(None);
+        };
+        let result: serde_json::Value =
+            client.request("thread/resume", serde_json::json!({ "threadId": thread_id }))?;
+        // The resumed thread object carries `lastTurn` (summary view) — its id
+        // is the turn we want to interrupt.
+        let last_turn_id = result
+            .get("thread")
+            .and_then(|t| t.get("lastTurn"))
+            .and_then(|lt| lt.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        Ok(last_turn_id)
+    }
+
+    fn ensure_client(&mut self) -> Result<(), RpcError> {
+        if self.client.is_some() {
+            return Ok(());
+        }
+        if self.open_failed {
+            return Err(RpcError::CliNotFound);
+        }
+        self.open()
+    }
+
+    fn request_rpc(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        self.ensure_client()?;
+        let Some(client) = self.client.as_mut() else {
+            return Err(RpcError::CliNotFound);
+        };
+        client.request(method, params)
     }
 
     fn fetch_threads(
