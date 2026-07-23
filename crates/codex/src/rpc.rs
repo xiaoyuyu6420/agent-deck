@@ -112,8 +112,11 @@ impl JsonRpcClient {
     }
 
     pub fn initialize(&mut self) -> Result<(), RpcError> {
+        // InitializeParams (codex-cli 0.145.0-alpha.27, verified 2026-07-23 via
+        // `codex app-server generate-json-schema`) requires only `clientInfo`;
+        // `protocolVersion` is not a field (server tolerates extras, but we keep
+        // it clean). An optional `capabilities` object is also accepted.
         let params = serde_json::json!({
-            "protocolVersion": 1,
             "clientInfo": { "name": "agent-deck", "version": "0.1.0" }
         });
         let _result: Value = self.request("initialize", params)?;

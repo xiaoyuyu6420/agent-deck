@@ -8,6 +8,10 @@ use serde::Deserialize;
 #[serde(rename_all = "camelCase")]
 pub struct CodexThread {
     pub id: String,
+    /// Rollout's git/worktree session id. Distinct from `id` (the canonical
+    /// thread id / rollout UUID) — kept for deserialization completeness but
+    /// NOT used for session addressing (deep link / resume use `id`). See
+    /// `map_thread`.
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -54,7 +58,14 @@ pub fn map_thread(t: &CodexThread) -> SessionSnapshot {
     let updated_at = updated_sec.saturating_mul(1000);
     SessionSnapshot {
         backend: BackendId::Codex,
-        session_id: t.session_id.clone().unwrap_or_else(|| t.id.clone()),
+        // Canonical codex session identifier is `thread.id` (the rollout UUID),
+        // NOT `thread.session_id`. The latter is a git/worktree session id (see
+        // `codex_turn_diff_event`: it carries both `thread_id` and `session_id`
+        // as distinct fields). They coincide for most threads, but the value
+        // deep-linking (`codex://threads/<id>`) and `thread/resume {threadId}`
+        // expect is `thread.id`. Verified 2026-07-23 against the ChatGPT.app
+        // renderer and the app-server schema.
+        session_id: t.id.clone(),
         title,
         status,
         risk: None,

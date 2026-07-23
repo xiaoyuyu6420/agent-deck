@@ -2,7 +2,7 @@ use agent_deck_host_core::{DesktopService, HostConfig, SessionInfo};
 use agent_deck_protocol::{BackendId, BoardState, LedFrame};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -155,36 +155,84 @@ fn open_zcode_session(
 }
 
 fn open_codex_session(
-    app: &AppHandle,
+    _app: &AppHandle,
     session_id: &str,
-    info: Option<&SessionInfo>,
+    _info: Option<&SessionInfo>,
 ) -> Result<(), String> {
-    // Codex has no stable public session URL on this machine; open CLI resume
-    // in Terminal when possible, otherwise just open the workspace folder.
-    if let Some(path) = info.and_then(|s| s.workspace_path.as_deref()) {
-        if !path.is_empty() {
-            let _ = Command::new("open").arg(path).status();
-        }
+    // Verified 2026-07-23 against ChatGPT.app (codex-cli 0.145.0-alpha.27):
+    //   - ChatGPT.app registers the `codex://` URL scheme (LaunchServices:
+    //     bundle "ChatGPT" claims scheme "codex:").
+    //   - The renderer builds `codex://threads/<threadId>` for the "Open in app"
+    //     menu item and the "copyAppLink" action (5 call sites across the
+    //     unpacked app.asar). <threadId> = `thread.id` (the rollout UUID), NOT
+    //     the rollout's `session_id` (which is a git/worktree session id, a
+    //     distinct concept — see crates/codex/src/mapper.rs).
+    //   - No second process is spawned, so no single-instance lock fight
+    //     (unlike spawning the codex binary directly — see the analogous ZCode
+    //     (B) dead-end in open_zcode_session).
+    //   - The app-server protocol independently supports `thread/resume
+    //     {threadId}` to rejoin a thread (rejoin, not a headless copy — unlike
+    //     ZCode's ACP session/resume). That RPC path is not needed here because
+    //     the deep link already drives the desktop window; it is documented in
+    //     docs/codex-integration.md for future use (e.g. in-app control).
+    //
+    // `session_id` here is `thread.id` (see crates/codex/src/mapper.rs).
+    //
+    // Cold-start caveat (empirically verified 2026-07-23): when ChatGPT.app is
+    // NOT already running, dispatching the deep link launches the app and lands
+    // on the right *project*, but the URL is swallowed during early startup and
+    // the specific thread is NOT navigated to (the new-thread landing page is
+    // shown instead). When the app IS already running, the same deep link jumps
+    // to the exact thread reliably and repeatably (verified across two distinct
+    // thread ids). Fix: on cold start, bring the app up first and wait for its
+    // main process to be ready, THEN dispatch the deep link.
+    if !chatgpt_app_running() {
+        // Launch without a URL so the app reaches its ready state, then wait.
+        let _ = Command::new("open").arg("-a").arg("ChatGPT").status();
+        wait_for_chatgpt_ready();
     }
-    // Prefer `codex resume <id>` in Terminal via osascript (macOS).
-    let script = format!(
-        r#"tell application "Terminal"
-  activate
-  do script "codex resume {session_id}"
-end tell"#
-    );
-    let status = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
+    let url = format!("codex://threads/{session_id}");
+    Command::new("open")
+        .arg(&url)
         .status()
-        .map_err(|e| format!("osascript failed: {e}"))?;
-    if !status.success() {
-        // Fallback: just open codex app/cli if present.
-        let _ = open_external(app, "https://chatgpt.com/codex");
-    }
+        .map_err(|e| format!("open codex thread failed: {e}"))?;
     Ok(())
 }
 
+/// Whether the ChatGPT.app GUI main process is running. Distinguishes the GUI
+/// from the bundled `codex app-server` child (which has a different exec path
+/// under Contents/Resources).
+fn chatgpt_app_running() -> bool {
+    Command::new("pgrep")
+        .args(["-f", "ChatGPT.app/Contents/MacOS/ChatGPT"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Poll for the ChatGPT.app main process to appear (cold-start readiness).
+/// Bounded so a click never blocks the UI thread for long.
+fn wait_for_chatgpt_ready() {
+    for _ in 0..40 {
+        if chatgpt_app_running() {
+            // Process exists; give the renderer a beat to register its URL
+            // handler before we dispatch.
+            std::thread::sleep(Duration::from_millis(500));
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Open an arbitrary URL/path via system `open(1)`.
+///
+/// Currently unused (the codex path switched to a `codex://threads/...` deep
+/// link, and zcode builds its own URL inline) but kept as the canonical helper
+/// for any future external-open fallback (e.g. a web URL when a scheme isn't
+/// registered).
+#[allow(dead_code)]
 fn open_external(_app: &AppHandle, url: &str) -> Result<(), String> {
     // Use system open(1). Avoid tauri-plugin-shell::open (deprecated → opener).
     Command::new("open")

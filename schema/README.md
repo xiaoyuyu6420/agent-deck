@@ -8,7 +8,7 @@
 codex app-server generate-json-schema --out ./schema/codex
 ```
 
-Phase 1 时执行，结果 commit 进来。CodexAdapter 实现时按这里的 schema 校验消息。
+**已落库**（2026-07-23，codex-cli 0.145.0-alpha.27）。CodexAdapter 实现时按这里的 schema 校验消息。详见 `codex/README.md`。
 
 ## zcode/
 
