@@ -26,7 +26,7 @@ firmware/
 │   ├── encoder.c           # EC11 旋转编码器（GPIO 中断）
 │   ├── joystick.c          # ADC 采样 + 阈值 → 方向事件
 │   ├── rgb.c               # SK6812 单线协议驱动
-│   ├── protocol.c          # 与 packages/protocol 字段对齐
+│   ├── protocol.c          # 与 crates/protocol 字段对齐
 │   └── effect.c            # solid / breathe / blink_fx 本地实现
 └── pico_sdk_import.cmake
 ```
