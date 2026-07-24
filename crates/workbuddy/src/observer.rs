@@ -106,7 +106,7 @@ impl JsonlObserver {
         let now = now_ms();
         let mut snaps = self.scan_all(now)?;
         // Most recently updated first.
-        snaps.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        snaps.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         snaps.truncate(self.opts.max_sessions);
         snaps.retain(|s| !self.is_excluded(s));
         self.last_snapshots = snaps.clone();
@@ -120,7 +120,7 @@ impl JsonlObserver {
         }
         let now = now_ms();
         let mut snaps = self.scan_all(now)?;
-        snaps.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        snaps.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         snaps.truncate(self.opts.catalog_max_sessions);
         snaps.retain(|s| !self.is_excluded(s));
         Ok(snaps)

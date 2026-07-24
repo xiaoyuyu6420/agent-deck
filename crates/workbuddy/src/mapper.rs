@@ -176,14 +176,13 @@ pub fn aggregate(
                 Some("user") => {
                     last_user_at = Some(max_ts(last_user_at, ev.timestamp));
                 }
-                Some("assistant") => {
+                Some("assistant")
                     // Track the chronologically last assistant message only —
                     // older incomplete rows left in the log must not pin status.
-                    if last_assistant_at.map(|t| ev.timestamp >= t).unwrap_or(true) {
+                    if last_assistant_at.map(|t| ev.timestamp >= t).unwrap_or(true) => {
                         last_assistant_at = Some(ev.timestamp);
                         last_assistant_incomplete = ev.status.as_deref() == Some("incomplete");
                     }
-                }
                 _ => {}
             },
             _ => {}

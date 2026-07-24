@@ -5,7 +5,6 @@
 //! 前提：WorkBuddy.app 在本机用过（产生 `~/.workbuddy/projects/*.jsonl`）。
 use agent_deck_protocol::DeckStatus;
 use agent_deck_workbuddy::{JsonlObserver, JsonlObserverOptions};
-use std::path::PathBuf;
 
 fn main() {
     println!("=== WorkBuddy backend e2e 探针 ===\n");

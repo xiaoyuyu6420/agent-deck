@@ -923,7 +923,7 @@ mod tests {
         fn dispatch(&mut self, action: &Action) -> anyhow::Result<String> {
             *self.dispatched.lock().unwrap() = vec![action.clone()];
             let tag = action.op_tag();
-            if self.supported.iter().any(|s| *s == tag) {
+            if self.supported.contains(&tag) {
                 Ok(format!("ok:{tag}"))
             } else {
                 Ok(format!("unsupported:{tag}"))
