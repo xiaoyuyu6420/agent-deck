@@ -163,7 +163,10 @@ fn load_sessions_basic(conn: &Connection) -> HashMap<String, SessionMeta> {
 
 fn collect_rows(
     rows: Result<
-        rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<(String, SessionMeta)>>,
+        rusqlite::MappedRows<
+            '_,
+            impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<(String, SessionMeta)>,
+        >,
         rusqlite::Error,
     >,
 ) -> HashMap<String, SessionMeta> {
@@ -191,9 +194,7 @@ pub fn load_deleted_session_ids(db_path: &Path) -> std::collections::HashSet<Str
         Ok(c) => c,
         Err(_) => return HashSet::new(),
     };
-    let mut stmt = match conn.prepare(
-        "SELECT id FROM sessions WHERE deleted_at IS NOT NULL",
-    ) {
+    let mut stmt = match conn.prepare("SELECT id FROM sessions WHERE deleted_at IS NOT NULL") {
         Ok(s) => s,
         Err(_) => return HashSet::new(),
     };
@@ -218,9 +219,8 @@ pub fn load_automation_names(db_path: &Path) -> HashMap<String, String> {
         Err(_) => return HashMap::new(),
     };
     // Prefer non-deleted when column exists; fall back for older schemas.
-    let mut stmt = match conn.prepare(
-        "SELECT name, cwds FROM automations WHERE deleted_at IS NULL",
-    ) {
+    let mut stmt = match conn.prepare("SELECT name, cwds FROM automations WHERE deleted_at IS NULL")
+    {
         Ok(s) => s,
         Err(_) => match conn.prepare("SELECT name, cwds FROM automations") {
             Ok(s) => s,
@@ -284,7 +284,8 @@ pub fn classify_workspace(
     // Automation MUST be decided by path shape — the flag is unreliable.
     let is_auto = cwd_leaf.starts_with("automation-");
     let is_task = meta.map(|m| m.is_playground).unwrap_or(false)
-        || (is_task_timestamp_folder(cwd_leaf) && is_under_workbuddy_home(cwd.as_deref().unwrap_or("")));
+        || (is_task_timestamp_folder(cwd_leaf)
+            && is_under_workbuddy_home(cwd.as_deref().unwrap_or("")));
 
     if is_auto {
         let label = cwd
@@ -493,12 +494,8 @@ mod tests {
             is_background_automation: false,
             ..Default::default()
         };
-        let (cat, label) = classify_workspace(
-            meta.cwd.as_deref(),
-            Some(&meta),
-            &HashMap::new(),
-            "打招呼",
-        );
+        let (cat, label) =
+            classify_workspace(meta.cwd.as_deref(), Some(&meta), &HashMap::new(), "打招呼");
         assert_eq!(cat, ProjectCategory::Task);
         assert_eq!(label, "ai 趋势");
     }
@@ -518,12 +515,8 @@ mod tests {
             is_background_automation: true,
             ..Default::default()
         };
-        let (cat, label) = classify_workspace(
-            meta.cwd.as_deref(),
-            Some(&meta),
-            &names,
-            "(untitled)",
-        );
+        let (cat, label) =
+            classify_workspace(meta.cwd.as_deref(), Some(&meta), &names, "(untitled)");
         assert_eq!(cat, ProjectCategory::Automation);
         assert_eq!(label, "nvidia 日报");
     }
@@ -538,12 +531,8 @@ mod tests {
             is_background_automation: false,
             ..Default::default()
         };
-        let (cat, label) = classify_workspace(
-            meta.cwd.as_deref(),
-            Some(&meta),
-            &HashMap::new(),
-            "打招呼",
-        );
+        let (cat, label) =
+            classify_workspace(meta.cwd.as_deref(), Some(&meta), &HashMap::new(), "打招呼");
         assert_eq!(cat, ProjectCategory::Project);
         assert_eq!(label, "workbuddy 测试文件夹");
     }

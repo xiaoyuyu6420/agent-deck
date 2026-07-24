@@ -309,6 +309,43 @@
 .key-action.reject { border-color: rgba(248, 113, 113, 0.35); }
 .key-action.stop { border-color: rgba(251, 146, 60, 0.35); }
 
+/* Firing pulse: brief brightness flash when the action is dispatched. */
+.key-action.firing {
+  filter: brightness(1.6);
+  transform: scale(0.96);
+  transition: filter 80ms ease-out, transform 80ms ease-out;
+}
+
+/* Toast for action result feedback. Sits above the keyboard, auto-fades. */
+.action-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%) translateY(8px);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(17, 17, 20, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e5e7eb;
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 80vw;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 9999;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.action-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.action-toast.fade-out {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-4px);
+}
+
 .hint {
   margin-top: 2px;
   font-size: 9px;

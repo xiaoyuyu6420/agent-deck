@@ -3,8 +3,8 @@
 
 use agent_deck_board::SessionBoard;
 use agent_deck_protocol::{
-    home_dir, BackendId, BoardState, DeckStatus, LedFrame, ProjectCategory, SessionSnapshot,
-    DONE_TTL_MS, DONE_TTL_UNOPENED_MS,
+    home_dir, Action, BackendId, BoardState, DeckStatus, LedFrame, ProjectCategory,
+    SessionSnapshot, DONE_TTL_MS, DONE_TTL_UNOPENED_MS,
 };
 use agent_deck_zcode::{SqliteObserver, SqliteObserverOptions};
 use serde::{Deserialize, Serialize};
@@ -167,6 +167,19 @@ pub trait BackendObserver: Send {
             .filter(|s| ids.iter().any(|id| id == &s.session_id))
             .collect())
     }
+
+    /// Dispatch a write Action to this backend. Returns `Ok(status)` on a
+    /// dispatched (or definitively unsupported) action, `Err` only on transport
+    /// failure of a *supported* action (the caller treats Err as a transient
+    /// error worth retrying).
+    ///
+    /// Default: the backend cannot perform any write action — return
+    /// `Ok("unsupported:{op}")`. Backends override to implement the actions
+    /// they support (e.g. Codex Stop via `turn/interrupt`). See
+    /// `docs/action-spec.md`.
+    fn dispatch(&mut self, action: &Action) -> anyhow::Result<String> {
+        Ok(format!("unsupported:{}", action.op_tag()))
+    }
 }
 
 impl BackendObserver for SqliteObserver {
@@ -202,6 +215,10 @@ impl BackendObserver for agent_deck_codex::CodexObserver {
 
     fn poll_pinned(&mut self, ids: &[String]) -> anyhow::Result<Vec<SessionSnapshot>> {
         Ok(self.poll_pinned_once(ids)?)
+    }
+
+    fn dispatch(&mut self, action: &Action) -> anyhow::Result<String> {
+        Ok(self.dispatch_once(action)?)
     }
 }
 
@@ -296,20 +313,19 @@ impl HostCore {
         }
 
         if config.enable_workbuddy {
-            let workbuddy_projects_dir = config
-                .workbuddy_projects_dir
-                .clone()
-                .unwrap_or_else(|| {
+            let workbuddy_projects_dir =
+                config.workbuddy_projects_dir.clone().unwrap_or_else(|| {
                     let home = home_dir();
                     home.join(".workbuddy/projects")
                 });
-            let mut workbuddy =
-                agent_deck_workbuddy::JsonlObserver::new(agent_deck_workbuddy::JsonlObserverOptions {
+            let mut workbuddy = agent_deck_workbuddy::JsonlObserver::new(
+                agent_deck_workbuddy::JsonlObserverOptions {
                     projects_dir: workbuddy_projects_dir,
                     exclude_workspaces: config.exclude_workspaces.clone(),
                     exclude_task_ids: config.exclude_task_ids.clone(),
                     ..Default::default()
-                });
+                },
+            );
             // Missing tree is fine — observer stays empty.
             let _ = workbuddy.open();
             observers.push(Box::new(workbuddy));
@@ -349,8 +365,7 @@ impl HostCore {
     }
 
     pub fn mark_opened_at(&mut self, backend: BackendId, session_id: &str, now: u64) {
-        self.opened_at
-            .insert(opened_key(backend, session_id), now);
+        self.opened_at.insert(opened_key(backend, session_id), now);
     }
 
     /// Poll all backends once and recompute board using wall clock.
@@ -386,13 +401,8 @@ impl HostCore {
             // live instead of frozen at its bind-time snapshot.
             if !pinned_ids.is_empty() {
                 if let Ok(pinned_snaps) = obs.poll_pinned(&pinned_ids) {
-                    let pinned_snaps = apply_done_decay(
-                        pinned_snaps,
-                        &opened_at,
-                        now,
-                        after_open_ms,
-                        unopened_ms,
-                    );
+                    let pinned_snaps =
+                        apply_done_decay(pinned_snaps, &opened_at, now, after_open_ms, unopened_ms);
                     self.board.upsert_sessions(pinned_snaps, now);
                 }
             }
@@ -526,6 +536,71 @@ impl HostCore {
         self.board_state()
             .map(|b| b.slots.iter().all(|s| s.session_id.is_none()))
             .unwrap_or(true)
+    }
+
+    /// Dispatch a write Action. Resolves the target slot (explicit `i`, else
+    /// the focused slot), finds its bound backend, and forwards the action to
+    /// that backend's observer. Returns the observer's status string.
+    ///
+    /// Slot-scoped actions (Accept/Reject/Stop) without a resolvable target
+    /// return `unsupported:{tag}:no_target`. Non-slot actions (StopAll,
+    /// FreezeAll, SetMode) are handled at the DesktopService layer (board-local
+    /// state) or broadcast to all observers.
+    pub fn dispatch_action(&mut self, action: &Action) -> String {
+        let tag = action.op_tag();
+        match action {
+            // Board-local actions (no backend round-trip). Currently stubbed —
+            // Phase 3 will implement FreezeAll/Unfreeze/SetMode here.
+            Action::FreezeAll | Action::Unfreeze | Action::SetMode { .. } => {
+                format!("unsupported:{tag}")
+            }
+            // Broadcast: interrupt every backend's running sessions.
+            Action::StopAll => {
+                let mut last = String::from("ok:stop_all:noop");
+                for obs in &mut self.observers {
+                    // StopAll has no slot; observers fall back to their first
+                    // live thread. A backend with nothing running returns
+                    // unsupported and we continue to the next.
+                    match obs.dispatch(action) {
+                        Ok(s) => last = s,
+                        Err(e) => last = format!("error:stop_all:{e}"),
+                    }
+                }
+                last
+            }
+            // Slot-scoped: Accept/Reject/Stop/Send need a target slot.
+            Action::Accept { i }
+            | Action::Reject { i }
+            | Action::Stop { i }
+            | Action::Send { i, .. } => {
+                let slot_i = i.or(Some(self.board.focus()));
+                let Some(slot_i) = slot_i else {
+                    return format!("unsupported:{tag}:no_target");
+                };
+                let Some(board) = self.board.board_state() else {
+                    return format!("unsupported:{tag}:no_board");
+                };
+                let Some(binding) = board.slots.get(slot_i) else {
+                    return format!("unsupported:{tag}:bad_slot");
+                };
+                let (Some(backend), Some(_session_id)) =
+                    (binding.backend, binding.session_id.as_deref())
+                else {
+                    return format!("unsupported:{tag}:empty_slot");
+                };
+                // Find the observer for this backend.
+                let Some(obs) = self.observers.iter_mut().find(|o| o.id() == backend) else {
+                    return format!("unsupported:{tag}:no_observer");
+                };
+                match obs.dispatch(action) {
+                    Ok(s) => s,
+                    Err(e) => format!("error:{tag}:{e}"),
+                }
+            }
+            // Focus/Pin are pure-local and already handled by dedicated
+            // commands (set_focus / pin_slot); reaching dispatch means misuse.
+            Action::Focus { .. } | Action::Pin { .. } => format!("unsupported:{tag}"),
+        }
     }
 }
 
@@ -689,9 +764,18 @@ impl DesktopService {
         false
     }
 
-    pub fn dispatch_action(&self, action: &str) -> String {
-        // V1: actions acknowledged but unsupported until ACP attach is verified.
-        format!("unsupported:{action}")
+    /// Dispatch a UI action string ("accept"/"reject"/"stop"/"stop_all").
+    ///
+    /// Parses the string into an `Action` targeting the **currently focused
+    /// slot** (the UI highlights focus before the user hits OK/NO/STP), then
+    /// routes it through `HostCore::dispatch_action`. Returns the status string
+    /// (`ok:...` / `unsupported:...` / `error:...`) for the UI to surface.
+    pub fn dispatch_action(&mut self, action: &str) -> String {
+        let parsed = match parse_ui_action(action) {
+            Some(a) => a,
+            None => return format!("unsupported:unknown:{action}"),
+        };
+        self.host.dispatch_action(&parsed)
     }
 
     pub fn host(&self) -> &HostCore {
@@ -704,6 +788,19 @@ pub fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Parse a UI action string ("accept"/"reject"/"stop"/"stop_all") into an
+/// `Action`. Slot index is left `None` — `HostCore::dispatch_action` resolves
+/// it to the focused slot. Unknown strings return `None`.
+pub fn parse_ui_action(s: &str) -> Option<Action> {
+    Some(match s.trim().to_ascii_lowercase().as_str() {
+        "accept" | "ok" => Action::Accept { i: None },
+        "reject" | "no" => Action::Reject { i: None },
+        "stop" | "stp" => Action::Stop { i: None },
+        "stop_all" | "stopall" => Action::StopAll,
+        _ => return None,
+    })
 }
 
 /// Default pin persistence path: `~/.agent-deck/pins.json`.
@@ -806,6 +903,144 @@ pub fn demo_board_state() -> (LedFrame, BoardState) {
 mod tests {
     use super::*;
 
+    /// A controllable observer that records every dispatch call. Used to prove
+    /// the action router reaches the backend bound to the focused slot (not a
+    /// global stub) and that slot index resolution is correct.
+    struct RecordingObserver {
+        id: BackendId,
+        snaps: Vec<SessionSnapshot>,
+        dispatched: std::sync::Mutex<Vec<Action>>,
+        supported: Vec<&'static str>,
+    }
+
+    impl BackendObserver for RecordingObserver {
+        fn id(&self) -> BackendId {
+            self.id
+        }
+        fn poll(&mut self) -> anyhow::Result<Vec<SessionSnapshot>> {
+            Ok(self.snaps.clone())
+        }
+        fn dispatch(&mut self, action: &Action) -> anyhow::Result<String> {
+            *self.dispatched.lock().unwrap() = vec![action.clone()];
+            let tag = action.op_tag();
+            if self.supported.contains(&tag) {
+                Ok(format!("ok:{tag}"))
+            } else {
+                Ok(format!("unsupported:{tag}"))
+            }
+        }
+    }
+
+    fn snap(backend: BackendId, id: &str, status: DeckStatus) -> SessionSnapshot {
+        SessionSnapshot {
+            backend,
+            session_id: id.into(),
+            title: id.into(),
+            status,
+            risk: None,
+            detail: None,
+            waiting_since: None,
+            updated_at: 1000,
+            workspace_path: None,
+            project_category: None,
+            project_label: None,
+        }
+    }
+
+    #[test]
+    fn dispatch_routes_stop_to_focused_slot_backend() {
+        // Slot allocator ranks Waiting(5) > Working(3), so:
+        //   slot 0 = codex (waiting), slot 1 = zcode (working).
+        let zcode_obs = RecordingObserver {
+            id: BackendId::Zcode,
+            snaps: vec![snap(BackendId::Zcode, "z1", DeckStatus::Working)],
+            dispatched: std::sync::Mutex::new(vec![]),
+            supported: vec![],
+        };
+        let codex_obs = RecordingObserver {
+            id: BackendId::Codex,
+            snaps: vec![snap(BackendId::Codex, "c1", DeckStatus::Waiting)],
+            dispatched: std::sync::Mutex::new(vec![]),
+            supported: vec!["stop"],
+        };
+        let mut host = HostCore::with_observers(5, vec![Box::new(zcode_obs), Box::new(codex_obs)]);
+        host.tick_at(1000).unwrap();
+        // Sanity: confirm the allocation we rely on.
+        let board = host.board_state().unwrap();
+        assert_eq!(board.slots[0].backend, Some(BackendId::Codex));
+        assert_eq!(board.slots[1].backend, Some(BackendId::Zcode));
+        // Focus 0 = codex → stop succeeds.
+        host.set_focus_at(0, 1000);
+        let r = host.dispatch_action(&Action::Stop { i: None });
+        assert_eq!(r, "ok:stop", "codex should accept stop, got: {r}");
+        // Focus 1 = zcode → stop unsupported (zcode has no write path).
+        host.set_focus_at(1, 1000);
+        let r = host.dispatch_action(&Action::Stop { i: None });
+        assert!(r.starts_with("unsupported:stop"), "got: {r}");
+    }
+
+    #[test]
+    fn dispatch_empty_slot_returns_no_target() {
+        let zcode_obs = RecordingObserver {
+            id: BackendId::Zcode,
+            snaps: vec![],
+            dispatched: std::sync::Mutex::new(vec![]),
+            supported: vec!["accept"],
+        };
+        let mut host = HostCore::with_observers(5, vec![Box::new(zcode_obs)]);
+        host.tick_at(1000).unwrap();
+        let r = host.dispatch_action(&Action::Accept { i: Some(0) });
+        assert!(
+            r.contains("empty_slot") || r.contains("no_target"),
+            "got: {r}"
+        );
+    }
+
+    #[test]
+    fn dispatch_explicit_slot_overrides_focus() {
+        // slot 0 = codex (waiting), slot 1 = zcode (working).
+        let zcode_obs = RecordingObserver {
+            id: BackendId::Zcode,
+            snaps: vec![snap(BackendId::Zcode, "z1", DeckStatus::Working)],
+            dispatched: std::sync::Mutex::new(vec![]),
+            supported: vec!["accept"],
+        };
+        let codex_obs = RecordingObserver {
+            id: BackendId::Codex,
+            snaps: vec![snap(BackendId::Codex, "c1", DeckStatus::Waiting)],
+            dispatched: std::sync::Mutex::new(vec![]),
+            supported: vec![],
+        };
+        let mut host = HostCore::with_observers(5, vec![Box::new(zcode_obs), Box::new(codex_obs)]);
+        host.tick_at(1000).unwrap();
+        // Focus is 0 (codex), but we explicitly target slot 1 (zcode), which
+        // supports accept → ok. Proves explicit `i` wins over focus.
+        host.set_focus_at(0, 1000);
+        let r = host.dispatch_action(&Action::Accept { i: Some(1) });
+        assert_eq!(r, "ok:accept", "zcode slot 1 should accept, got: {r}");
+    }
+
+    #[test]
+    fn parse_ui_action_maps_known_strings() {
+        assert!(matches!(
+            parse_ui_action("accept").unwrap(),
+            Action::Accept { i: None }
+        ));
+        assert!(matches!(
+            parse_ui_action("OK").unwrap(),
+            Action::Accept { i: None }
+        ));
+        assert!(matches!(
+            parse_ui_action("stp").unwrap(),
+            Action::Stop { i: None }
+        ));
+        assert!(matches!(
+            parse_ui_action("stop_all").unwrap(),
+            Action::StopAll
+        ));
+        assert!(parse_ui_action("nope").is_none());
+    }
+
     fn wb_done(session_id: &str, done_since: u64) -> SessionSnapshot {
         SessionSnapshot {
             backend: BackendId::Workbuddy,
@@ -817,8 +1052,8 @@ mod tests {
             waiting_since: None,
             updated_at: done_since,
             workspace_path: None,
-                project_category: None,
-                project_label: None,
+            project_category: None,
+            project_label: None,
         }
     }
 
@@ -833,8 +1068,8 @@ mod tests {
             waiting_since: None,
             updated_at: done_since,
             workspace_path: None,
-                project_category: None,
-                project_label: None,
+            project_category: None,
+            project_label: None,
         }
     }
 
@@ -867,13 +1102,7 @@ mod tests {
         let now = opened + DONE_TTL_MS - 1;
         let snap = wb_done("s1", done_since);
         assert_eq!(
-            decay_done_status(
-                &snap,
-                Some(opened),
-                now,
-                DONE_TTL_MS,
-                DONE_TTL_UNOPENED_MS
-            ),
+            decay_done_status(&snap, Some(opened), now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
             DeckStatus::Done
         );
     }
@@ -885,13 +1114,7 @@ mod tests {
         let now = opened + DONE_TTL_MS + 1;
         let snap = wb_done("s1", done_since);
         assert_eq!(
-            decay_done_status(
-                &snap,
-                Some(opened),
-                now,
-                DONE_TTL_MS,
-                DONE_TTL_UNOPENED_MS
-            ),
+            decay_done_status(&snap, Some(opened), now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
             DeckStatus::Idle
         );
     }
@@ -904,13 +1127,7 @@ mod tests {
         let now = done_since + DONE_TTL_MS + 60_000; // past short TTL from open
         let snap = wb_done("s1", done_since);
         assert_eq!(
-            decay_done_status(
-                &snap,
-                Some(opened),
-                now,
-                DONE_TTL_MS,
-                DONE_TTL_UNOPENED_MS
-            ),
+            decay_done_status(&snap, Some(opened), now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
             DeckStatus::Done
         );
     }

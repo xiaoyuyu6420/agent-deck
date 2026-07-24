@@ -11,9 +11,10 @@
     "typecheck": "pnpm --filter @agent-deck/desktop typecheck",
     "test": "pnpm test:rust",
     "test:e2e": "pnpm test:rust:e2e",
+    "test:ui": "cargo run -p agent-deck-desktop-e2e",
     "dev:desktop": "pnpm --filter @agent-deck/desktop tauri dev",
     "build:desktop": "pnpm --filter @agent-deck/desktop tauri build",
-    "test:rust": "cargo test --workspace --exclude agent-deck-desktop",
+    "test:rust": "cargo test --workspace --exclude agent-deck-desktop --exclude agent-deck-desktop-e2e",
     "test:rust:e2e": "cargo test -p agent-deck-host-core --tests"
   },
   "devDependencies": {

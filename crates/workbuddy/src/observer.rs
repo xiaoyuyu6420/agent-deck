@@ -106,7 +106,7 @@ impl JsonlObserver {
         let now = now_ms();
         let mut snaps = self.scan_all(now)?;
         // Most recently updated first.
-        snaps.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        snaps.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         snaps.truncate(self.opts.max_sessions);
         snaps.retain(|s| !self.is_excluded(s));
         self.last_snapshots = snaps.clone();
@@ -120,7 +120,7 @@ impl JsonlObserver {
         }
         let now = now_ms();
         let mut snaps = self.scan_all(now)?;
-        snaps.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        snaps.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         snaps.truncate(self.opts.catalog_max_sessions);
         snaps.retain(|s| !self.is_excluded(s));
         Ok(snaps)
@@ -453,7 +453,9 @@ mod tests {
         write_session(
             &ws,
             "s1",
-            &[r#"{"timestamp":1000,"type":"ai-title","aiTitle":"打招呼","cwd":"/Users/x/WorkBuddy/t"}"#],
+            &[
+                r#"{"timestamp":1000,"type":"ai-title","aiTitle":"打招呼","cwd":"/Users/x/WorkBuddy/t"}"#,
+            ],
         );
 
         let db = tmp.path().join("workbuddy.db");
@@ -485,10 +487,7 @@ mod tests {
         assert_eq!(snaps.len(), 1);
         assert_eq!(snaps[0].title, "ai");
         // is_playground=1 → 任务; label is the session title.
-        assert_eq!(
-            snaps[0].project_category,
-            Some(ProjectCategory::Task),
-        );
+        assert_eq!(snaps[0].project_category, Some(ProjectCategory::Task),);
         assert_eq!(snaps[0].project_label.as_deref(), Some("ai"));
     }
 
@@ -503,7 +502,9 @@ mod tests {
         write_session(
             &ws,
             "s1",
-            &[r#"{"timestamp":1,"type":"ai-title","aiTitle":"x","cwd":"/Users/x/WorkBuddy/automation-2026-07-17-10-27-12"}"#],
+            &[
+                r#"{"timestamp":1,"type":"ai-title","aiTitle":"x","cwd":"/Users/x/WorkBuddy/automation-2026-07-17-10-27-12"}"#,
+            ],
         );
 
         let db = tmp.path().join("workbuddy.db");
@@ -537,10 +538,7 @@ mod tests {
         obs.open().unwrap();
         let snaps = obs.poll_once().unwrap();
         assert_eq!(snaps.len(), 1);
-        assert_eq!(
-            snaps[0].project_category,
-            Some(ProjectCategory::Automation)
-        );
+        assert_eq!(snaps[0].project_category, Some(ProjectCategory::Automation));
         assert_eq!(snaps[0].project_label.as_deref(), Some("每日 AI 新闻推送"));
     }
 
@@ -555,7 +553,9 @@ mod tests {
         write_session(
             &ws,
             "s1",
-            &[r#"{"timestamp":1,"type":"ai-title","aiTitle":"fix bug","cwd":"/Users/x/Desktop/modjing"}"#],
+            &[
+                r#"{"timestamp":1,"type":"ai-title","aiTitle":"fix bug","cwd":"/Users/x/Desktop/modjing"}"#,
+            ],
         );
 
         let mut obs = JsonlObserver::new(JsonlObserverOptions {
@@ -565,10 +565,7 @@ mod tests {
         obs.open().unwrap();
         let snaps = obs.poll_once().unwrap();
         assert_eq!(snaps.len(), 1);
-        assert_eq!(
-            snaps[0].project_category,
-            Some(ProjectCategory::Project)
-        );
+        assert_eq!(snaps[0].project_category, Some(ProjectCategory::Project));
         assert_eq!(snaps[0].project_label.as_deref(), Some("modjing"));
     }
 

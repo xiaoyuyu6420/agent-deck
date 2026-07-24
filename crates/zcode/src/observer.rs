@@ -248,7 +248,7 @@ LIMIT {limit}
             .expect("query_tasks_by_ids requires an open connection");
         // Build `IN (?, ?, …)` with one placeholder per id (parameterized →
         // no injection even though ids originate from the local pins file).
-        let placeholders: Vec<&str> = std::iter::repeat("?").take(ids.len()).collect();
+        let placeholders: Vec<&str> = std::iter::repeat_n("?", ids.len()).collect();
         let in_clause = placeholders.join(", ");
         let sql = format!(
             r#"

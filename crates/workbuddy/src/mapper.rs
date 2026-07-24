@@ -176,14 +176,13 @@ pub fn aggregate(
                 Some("user") => {
                     last_user_at = Some(max_ts(last_user_at, ev.timestamp));
                 }
-                Some("assistant") => {
+                Some("assistant")
                     // Track the chronologically last assistant message only —
                     // older incomplete rows left in the log must not pin status.
-                    if last_assistant_at.map(|t| ev.timestamp >= t).unwrap_or(true) {
+                    if last_assistant_at.map(|t| ev.timestamp >= t).unwrap_or(true) => {
                         last_assistant_at = Some(ev.timestamp);
                         last_assistant_incomplete = ev.status.as_deref() == Some("incomplete");
                     }
-                }
                 _ => {}
             },
             _ => {}
@@ -209,9 +208,7 @@ pub fn aggregate(
         if requires_approval(&ev.arguments) {
             pending_approval_at = Some(max_ts(pending_approval_at, ev.timestamp));
             // Prefer the newest approval-pending tool as the detail.
-            if waiting_detail.is_none()
-                || pending_approval_at.is_some_and(|t| ev.timestamp >= t)
-            {
+            if waiting_detail.is_none() || pending_approval_at.is_some_and(|t| ev.timestamp >= t) {
                 waiting_detail = ev.name.clone();
             }
         } else {
@@ -239,7 +236,11 @@ pub fn aggregate(
 /// Event timestamps alone are not enough after Stop: WorkBuddy freezes the
 /// incomplete row without rewriting it to `completed`.
 fn stream_is_live(signals: &SessionSignals, now: u64) -> bool {
-    within(now, signals.file_mtime_ms.or(Some(signals.updated_at)), STREAMING_WINDOW_MS)
+    within(
+        now,
+        signals.file_mtime_ms.or(Some(signals.updated_at)),
+        STREAMING_WINDOW_MS,
+    )
 }
 
 fn max_ts(prev: Option<u64>, ts: u64) -> u64 {
@@ -321,10 +322,7 @@ pub fn infer_status(signals: &SessionSignals, now: u64) -> DeckStatus {
     // Stop; once the file is no longer live we treat the freeze point as a
     // completion so the key goes green instead of staying on run. Host still
     // applies open-aware TTL on top of this Done.
-    if signals.last_assistant_incomplete
-        && signals.last_assistant_at.is_some()
-        && !live
-    {
+    if signals.last_assistant_incomplete && signals.last_assistant_at.is_some() && !live {
         return DeckStatus::Done;
     }
 
@@ -359,9 +357,7 @@ pub fn map_session(signals: &SessionSignals, now: u64) -> SessionSnapshot {
         // For Done, prefer the completion/interrupt timestamp so host open-aware
         // TTL measures from the actual turn end, not a later title/cwd event.
         updated_at: if status == DeckStatus::Done {
-            signals
-                .last_assistant_at
-                .unwrap_or(signals.updated_at)
+            signals.last_assistant_at.unwrap_or(signals.updated_at)
         } else {
             signals.updated_at
         },
@@ -458,10 +454,7 @@ mod tests {
     fn working_when_assistant_message_is_incomplete() {
         // The "缓解脑雾的方法" case: model is streaming text, no live tool.
         let now = 10_000_000;
-        let events = vec![
-            user(now - 30_000),
-            assistant(now - 5_000, "incomplete"),
-        ];
+        let events = vec![user(now - 30_000), assistant(now - 5_000, "incomplete")];
         let s = agg(&events, "s1", Some(now - 1_000));
         assert!(s.last_assistant_incomplete);
         assert_eq!(infer_status(&s, now), DeckStatus::Working);
@@ -528,10 +521,7 @@ mod tests {
     fn done_when_assistant_just_completed() {
         // Turn just finished → green flash.
         let now = 10_000_000;
-        let events = vec![
-            user(now - 60_000),
-            assistant(now - 5_000, "completed"),
-        ];
+        let events = vec![user(now - 60_000), assistant(now - 5_000, "completed")];
         let s = agg(&events, "s1", Some(now - 5_000));
         assert_eq!(infer_status(&s, now), DeckStatus::Done);
     }
@@ -568,10 +558,7 @@ mod tests {
     fn old_completed_conversation_is_done_not_idle() {
         // Mapper reports Done for any completed turn; host may later decay.
         let now = 10_000_000;
-        let events = vec![
-            user(now - 600_000),
-            assistant(now - 500_000, "completed"),
-        ];
+        let events = vec![user(now - 600_000), assistant(now - 500_000, "completed")];
         let s = agg(&events, "s1", Some(now - 500_000));
         assert_eq!(infer_status(&s, now), DeckStatus::Done);
     }
@@ -661,10 +648,7 @@ mod tests {
     fn completed_reply_after_user_is_done_not_idle() {
         // Key fix: completed turn recently → Done (green), not Idle (gray).
         let now = 10_000_000;
-        let events = vec![
-            user(now - 30_000),
-            assistant(now - 5_000, "completed"),
-        ];
+        let events = vec![user(now - 30_000), assistant(now - 5_000, "completed")];
         let s = agg(&events, "s1", Some(now - 5_000));
         assert_eq!(infer_status(&s, now), DeckStatus::Done);
     }
@@ -730,10 +714,7 @@ mod tests {
         let mut e = ev("message", 100);
         e.cwd = Some("/Users/x/WorkBuddy/proj".into());
         let s = agg(&[e], "s1", Some(100));
-        assert_eq!(
-            s.workspace_path.as_deref(),
-            Some("/Users/x/WorkBuddy/proj")
-        );
+        assert_eq!(s.workspace_path.as_deref(), Some("/Users/x/WorkBuddy/proj"));
     }
 
     #[test]

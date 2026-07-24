@@ -70,7 +70,11 @@ pub fn detect_codex_cli() -> Option<PathBuf> {
         }
     }
     // Fall back to PATH lookup (adds .exe on Windows automatically).
-    let exe_name = if cfg!(target_os = "windows") { "codex.exe" } else { "codex" };
+    let exe_name = if cfg!(target_os = "windows") {
+        "codex.exe"
+    } else {
+        "codex"
+    };
     which(exe_name)
 }
 

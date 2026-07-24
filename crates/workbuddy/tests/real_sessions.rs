@@ -50,12 +50,13 @@ fn real_sessions_have_titles_and_workspaces() {
     let mut obs = real_observer();
     let snaps = obs.poll_once().expect("poll");
     // Every real session must carry a workspace path (cwd is on every event).
-    let with_ws = snaps
-        .iter()
-        .filter(|s| s.workspace_path.is_some())
-        .count();
+    let with_ws = snaps.iter().filter(|s| s.workspace_path.is_some()).count();
     eprintln!("{with_ws}/{} with workspace", snaps.len());
-    assert_eq!(with_ws, snaps.len(), "every session should have a workspace");
+    assert_eq!(
+        with_ws,
+        snaps.len(),
+        "every session should have a workspace"
+    );
 
     // Titles: interactive tasks carry an ai-title; headless `automation-*`
     // sessions legitimately have none. Require that the non-automation subset
@@ -74,10 +75,7 @@ fn real_sessions_have_titles_and_workspaces() {
             .iter()
             .filter(|s| s.title != "(untitled)")
             .count();
-        eprintln!(
-            "{titled}/{} interactive sessions titled",
-            interactive.len()
-        );
+        eprintln!("{titled}/{} interactive sessions titled", interactive.len());
         assert!(
             titled as f64 / interactive.len() as f64 > 0.5,
             "most interactive sessions should have a title"

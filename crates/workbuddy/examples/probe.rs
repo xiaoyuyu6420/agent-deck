@@ -5,7 +5,6 @@
 //! 前提：WorkBuddy.app 在本机用过（产生 `~/.workbuddy/projects/*.jsonl`）。
 use agent_deck_protocol::DeckStatus;
 use agent_deck_workbuddy::{JsonlObserver, JsonlObserverOptions};
-use std::path::PathBuf;
 
 fn main() {
     println!("=== WorkBuddy backend e2e 探针 ===\n");
@@ -14,7 +13,7 @@ fn main() {
     println!("数据源: {}", projects_dir.display());
     println!(
         "目录存在: {}",
-        if projects_dir.is_dir() { "✅" } else { "❌" } 
+        if projects_dir.is_dir() { "✅" } else { "❌" }
     );
     // 统计 jsonl 文件数（佐证数据源非空）
     let file_count = std::fs::read_dir(&projects_dir)
@@ -115,9 +114,12 @@ fn summarize(snaps: &[agent_deck_protocol::SessionSnapshot]) {
     }
     println!("状态分布: {:?}", counts);
     println!("分类分布: {:?}", cats);
-    let has_live = snaps
-        .iter()
-        .any(|s| matches!(s.status, DeckStatus::Working | DeckStatus::Waiting | DeckStatus::Error));
+    let has_live = snaps.iter().any(|s| {
+        matches!(
+            s.status,
+            DeckStatus::Working | DeckStatus::Waiting | DeckStatus::Error
+        )
+    });
     if has_live {
         println!("✅ 检测到活跃会话（Working/Waiting/Error）");
     } else {

@@ -2,7 +2,7 @@
 //! Covers demo fallback, focus, action stub, real sqlite path.
 
 use agent_deck_host_core::{DesktopService, HostConfig};
-use agent_deck_protocol::{DeckStatus, LedFx};
+use agent_deck_protocol::{BackendId, DeckStatus, LedFx};
 use rusqlite::Connection;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -113,12 +113,63 @@ fn set_focus_updates_board_focus() {
 }
 
 #[test]
-fn dispatch_action_is_unsupported_v1() {
+fn dispatch_action_unknown_returns_unsupported() {
     let (_dir, tasks, tool) = empty_fixture();
-    let svc = service_with(tasks, tool);
-    assert_eq!(svc.dispatch_action("accept"), "unsupported:accept");
-    assert_eq!(svc.dispatch_action("reject"), "unsupported:reject");
-    assert_eq!(svc.dispatch_action("stop"), "unsupported:stop");
+    let mut svc = service_with(tasks, tool);
+    // Unknown action string is rejected at parse time.
+    assert_eq!(svc.dispatch_action("bogus"), "unsupported:unknown:bogus");
+}
+
+#[test]
+fn dispatch_action_without_target_slot_is_unsupported() {
+    let (_dir, tasks, tool) = empty_fixture();
+    let mut svc = service_with(tasks, tool);
+    // Empty board, focused slot 0 has no session → no target.
+    let r = svc.dispatch_action("accept");
+    assert!(r.starts_with("unsupported:"), "got: {r}");
+    assert!(
+        r.contains("empty_slot") || r.contains("no_observer"),
+        "got: {r}"
+    );
+}
+
+#[test]
+fn dispatch_action_routes_to_focused_slot_backend() {
+    // With only a zcode observer registered (codex/workbuddy disabled), a
+    // zcode-bound slot exists but zcode's dispatch is the trait default →
+    // "unsupported:accept". This proves the router reached the right backend
+    // rather than the old global stub.
+    let (dir, tasks, tool) = empty_fixture();
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let tasks_db = Connection::open(&tasks).unwrap();
+    tasks_db
+        .execute(
+            "INSERT INTO tasks (workspace_key, workspace_path, task_id, title, task_status, created_at, updated_at, deleted, archived)
+             VALUES ('ws:a','/tmp','sess_a','A','running',?1,?1,0,0)",
+            rusqlite::params![t as i64],
+        )
+        .unwrap();
+    drop(tasks_db);
+
+    let mut svc = service_with(tasks, tool);
+    svc.set_auto_fill(true);
+    svc.tick_at(t).unwrap();
+    // Slot 0 now holds the zcode session; focus defaults to 0.
+    let board = svc.board_state();
+    let bound = board.slots.iter().find(|s| s.session_id.is_some()).unwrap();
+    assert_eq!(bound.backend, Some(BackendId::Zcode));
+    let focused = board.focus;
+    let r = svc.dispatch_action("stop");
+    // zcode dispatch is the trait default (no write path yet) → unsupported,
+    // but the tag proves routing worked (not the old "unsupported:stop" stub
+    // which would also match — so we additionally assert it's NOT the empty-
+    // slot path).
+    assert!(r.starts_with("unsupported:stop"), "got: {r}");
+    assert!(!r.contains("empty_slot"), "should have routed, got: {r}");
+    let _ = (dir, focused);
 }
 
 #[test]
