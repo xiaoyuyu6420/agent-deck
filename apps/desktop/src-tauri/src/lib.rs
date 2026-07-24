@@ -31,10 +31,18 @@ struct SettingsView {
 
 fn default_config() -> HostConfig {
     let home = home_dir();
+    // E2E override: when set, point the data paths at isolated fixtures instead
+    // of the real ~/.zcode. Unset in production → unchanged behavior.
+    let tasks_db_path = std::env::var("AGENT_DECK_TASKS_DB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| home.join(".zcode/v2/tasks-index.sqlite"));
+    let tool_db_path = std::env::var("AGENT_DECK_TOOL_DB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| home.join(".zcode/cli/db/db.sqlite"));
     // Do NOT exclude the current repo — user may want to bind its sessions.
     HostConfig {
-        tasks_db_path: home.join(".zcode/v2/tasks-index.sqlite"),
-        tool_db_path: home.join(".zcode/cli/db/db.sqlite"),
+        tasks_db_path,
+        tool_db_path,
         exclude_workspaces: vec![],
         exclude_task_ids: vec![],
         slot_count: 8,

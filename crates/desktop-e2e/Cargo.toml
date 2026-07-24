@@ -1,0 +1,17 @@
+[package]
+name = "agent-deck-desktop-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UI end-to-end tests for the Tauri desktop app (local macOS, Accessibility API driver)"
+
+# Local-only: deliberately excluded from CI (ci.yml runs on ubuntu with no
+# WebView/display, and the Accessibility API is macOS-only).
+# Run with: cargo run -p agent-deck-desktop-e2e
+
+[dependencies]
+rusqlite = { workspace = true }
+tempfile = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

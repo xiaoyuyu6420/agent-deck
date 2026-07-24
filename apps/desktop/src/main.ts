@@ -251,7 +251,7 @@ function paintKeyboard(board: BoardState, leds: LedFrame) {
       const pinBadge = slot.pinned ? '<span class="pin-badge">📌</span>' : ''
       const backend = slot.backend ? BACKEND_LABEL[slot.backend] : ''
       return `
-        <div class="key${focused}${empty}${pinned}" data-i="${slot.i}" data-session-id="${slot.sessionId ?? ''}">
+        <div class="key${focused}${empty}${pinned}" data-i="${slot.i}" data-session-id="${slot.sessionId ?? ''}" role="button" aria-label="key-${slot.i}" tabindex="0">
           ${pinBadge}
           <div class="key-led fx-${fx} led-${slot.status}" style="background:${rgbCss(rgb, br)}"></div>
           <div class="key-content">
