@@ -278,9 +278,29 @@ mod tests {
         assert_eq!(StopAll.op_tag(), "stop_all");
         assert_eq!(FreezeAll.op_tag(), "freeze_all");
         assert_eq!(Unfreeze.op_tag(), "unfreeze");
-        assert_eq!(SetMode { mode: PolicyMode::Act }.op_tag(), "set_mode");
-        assert_eq!(Send { i: None, text: "".into() }.op_tag(), "send");
+        assert_eq!(
+            SetMode {
+                mode: PolicyMode::Act
+            }
+            .op_tag(),
+            "set_mode"
+        );
+        assert_eq!(
+            Send {
+                i: None,
+                text: "".into()
+            }
+            .op_tag(),
+            "send"
+        );
         assert_eq!(Focus { i: 0 }.op_tag(), "focus");
-        assert_eq!(Pin { i: 0, session_id: None }.op_tag(), "pin");
+        assert_eq!(
+            Pin {
+                i: 0,
+                session_id: None
+            }
+            .op_tag(),
+            "pin"
+        );
     }
 }

@@ -82,7 +82,9 @@ impl AxClient {
             .stdin
             .as_mut()
             .context("swift driver stdin already closed")?;
-        stdin.write_all(line.as_bytes()).context("write to swift driver failed")?;
+        stdin
+            .write_all(line.as_bytes())
+            .context("write to swift driver failed")?;
         stdin.flush()?;
 
         // Read lines until we see our id (swift may emit stray output).
@@ -198,7 +200,9 @@ impl E2e {
 
     /// Wait until a CSS-like selector resolves in the webview.
     pub fn wait(&mut self, selector: &str) -> Result<()> {
-        let resp = self.ax.call("wait", json!({ "selector": selector, "ms": 8000 }))?;
+        let resp = self
+            .ax
+            .call("wait", json!({ "selector": selector, "ms": 8000 }))?;
         if resp.get("ok") == Some(&Value::Bool(true)) {
             Ok(())
         } else {
@@ -217,7 +221,9 @@ impl E2e {
 
     /// Click (press) the first element matching a selector.
     pub fn click(&mut self, selector: &str) -> Result<()> {
-        let resp = self.ax.call("click", json!({ "selector": selector, "ms": 8000 }))?;
+        let resp = self
+            .ax
+            .call("click", json!({ "selector": selector, "ms": 8000 }))?;
         if resp.get("ok") == Some(&Value::Bool(true)) {
             Ok(())
         } else {
@@ -227,7 +233,9 @@ impl E2e {
 
     /// Read the AXValue (and AXTitle) of the first element matching a selector.
     pub fn value(&mut self, selector: &str) -> Result<(String, String)> {
-        let resp = self.ax.call("get_value", json!({ "selector": selector, "ms": 8000 }))?;
+        let resp = self
+            .ax
+            .call("get_value", json!({ "selector": selector, "ms": 8000 }))?;
         let v = resp
             .get("value")
             .and_then(|v| v.as_str())

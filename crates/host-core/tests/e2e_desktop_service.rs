@@ -127,7 +127,10 @@ fn dispatch_action_without_target_slot_is_unsupported() {
     // Empty board, focused slot 0 has no session → no target.
     let r = svc.dispatch_action("accept");
     assert!(r.starts_with("unsupported:"), "got: {r}");
-    assert!(r.contains("empty_slot") || r.contains("no_observer"), "got: {r}");
+    assert!(
+        r.contains("empty_slot") || r.contains("no_observer"),
+        "got: {r}"
+    );
 }
 
 #[test]

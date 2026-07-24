@@ -117,10 +117,7 @@ impl IpcStateWatcher {
 
     /// 是否已收到过至少一条 stream 状态（announce 成功后的 snapshot 也算）。
     pub fn is_connected(&self) -> bool {
-        self.state
-            .lock()
-            .map(|m| !m.is_empty())
-            .unwrap_or(false)
+        self.state.lock().map(|m| !m.is_empty()).unwrap_or(false)
     }
 }
 
@@ -134,7 +131,11 @@ impl Drop for IpcStateWatcher {
 }
 
 #[cfg(unix)]
-fn run_loop(socket_path: PathBuf, state: Arc<Mutex<HashMap<String, IpcState>>>, stop: Arc<AtomicBool>) {
+fn run_loop(
+    socket_path: PathBuf,
+    state: Arc<Mutex<HashMap<String, IpcState>>>,
+    stop: Arc<AtomicBool>,
+) {
     while !stop.load(Ordering::Relaxed) {
         match connect_and_run(&socket_path, &state, &stop) {
             Ok(()) => {
@@ -209,10 +210,7 @@ fn connect_and_run(
                 && frame.get("method").and_then(|v| v.as_str()) == Some("initialize")
                 && frame.get("resultType").and_then(|v| v.as_str()) == Some("success")
             {
-                if let Some(id) = frame
-                    .pointer("/result/clientId")
-                    .and_then(|v| v.as_str())
-                {
+                if let Some(id) = frame.pointer("/result/clientId").and_then(|v| v.as_str()) {
                     client_id = Some(id.to_string());
                     // flush 握手前积压的 follow 邀请
                     if let Some(cid) = client_id.as_deref() {
@@ -635,11 +633,10 @@ fn json_contains_string_field(v: &Value, key: &str, value: &str) -> bool {
             if m.get(key).and_then(|x| x.as_str()) == Some(value) {
                 return true;
             }
-            m.values().any(|x| json_contains_string_field(x, key, value))
+            m.values()
+                .any(|x| json_contains_string_field(x, key, value))
         }
-        Value::Array(a) => a
-            .iter()
-            .any(|x| json_contains_string_field(x, key, value)),
+        Value::Array(a) => a.iter().any(|x| json_contains_string_field(x, key, value)),
         _ => false,
     }
 }
@@ -748,7 +745,9 @@ mod tests {
         });
         let s = parse_state_changed(&frame).expect("应解析 snapshot");
         assert_eq!(s.thread_id, "abc-123");
-        assert!(matches!(s.status, ThreadStatus::Active { ref active_flags } if active_flags.is_empty()));
+        assert!(
+            matches!(s.status, ThreadStatus::Active { ref active_flags } if active_flags.is_empty())
+        );
     }
 
     #[test]
@@ -848,7 +847,9 @@ mod tests {
             }
         });
         let s = parse_state_changed(&frame).expect("turn inProgress → working");
-        assert!(matches!(s.status, ThreadStatus::Active { ref active_flags } if active_flags.is_empty()));
+        assert!(
+            matches!(s.status, ThreadStatus::Active { ref active_flags } if active_flags.is_empty())
+        );
     }
 
     #[test]
@@ -887,7 +888,9 @@ mod tests {
             }
         });
         let s = parse_state_changed(&frame).expect("inProgress → working");
-        assert!(matches!(s.status, ThreadStatus::Active { ref active_flags } if active_flags.is_empty()));
+        assert!(
+            matches!(s.status, ThreadStatus::Active { ref active_flags } if active_flags.is_empty())
+        );
     }
 
     #[test]

@@ -65,7 +65,7 @@ jobs:
         run: pnpm build
 
       - name: Run unit + E2E tests
-        run: cargo test --workspace --exclude agent-deck-desktop --verbose
+        run: cargo test --workspace --exclude agent-deck-desktop --exclude agent-deck-desktop-e2e --verbose
 
       - name: Check desktop crate compiles
         run: cargo check -p agent-deck-desktop
@@ -92,4 +92,4 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --workspace --exclude agent-deck-desktop --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude agent-deck-desktop --exclude agent-deck-desktop-e2e --all-targets -- -D warnings

@@ -160,7 +160,8 @@ impl CodexObserver {
                     Some(id) => id,
                     None => return Ok(format!("unsupported:{tag}:no_target")),
                 };
-                self.stop_thread(&thread_id).map(|_| format!("ok:{tag}:{thread_id}"))
+                self.stop_thread(&thread_id)
+                    .map(|_| format!("ok:{tag}:{thread_id}"))
             }
             // Accept / Reject: blocked on requestId capture (see docstring).
             Action::Accept { .. } | Action::Reject { .. } => {
@@ -223,8 +224,10 @@ impl CodexObserver {
         let Some(client) = self.client.as_mut() else {
             return Ok(None);
         };
-        let result: serde_json::Value =
-            client.request("thread/resume", serde_json::json!({ "threadId": thread_id }))?;
+        let result: serde_json::Value = client.request(
+            "thread/resume",
+            serde_json::json!({ "threadId": thread_id }),
+        )?;
         // The resumed thread object carries `lastTurn` (summary view) — its id
         // is the turn we want to interrupt.
         let last_turn_id = result
@@ -283,21 +286,19 @@ impl CodexObserver {
         // Explicitly request non-archived threads. Schema: archived=false|null
         // returns only non-archived; omit would also default that way on some
         // builds, but pass false so archived never leak into bind picker.
-        let result: ThreadListResult = match client.request(
-            "thread/list",
-            serde_json::json!({ "archived": false }),
-        ) {
-            Ok(r) => r,
-            Err(_) => {
-                // Drop dead client; next poll will try reconnect once.
-                self.client = None;
-                return Ok(if keep_idle {
-                    vec![]
-                } else {
-                    self.last_snapshots.clone()
-                });
-            }
-        };
+        let result: ThreadListResult =
+            match client.request("thread/list", serde_json::json!({ "archived": false })) {
+                Ok(r) => r,
+                Err(_) => {
+                    // Drop dead client; next poll will try reconnect once.
+                    self.client = None;
+                    return Ok(if keep_idle {
+                        vec![]
+                    } else {
+                        self.last_snapshots.clone()
+                    });
+                }
+            };
 
         let now_sec = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -149,12 +149,7 @@ mod tests {
         row_with_active(status, waiting, detail, false)
     }
 
-    fn row_with_active(
-        status: &str,
-        waiting: i64,
-        detail: Option<&str>,
-        active: bool,
-    ) -> ZcodeRow {
+    fn row_with_active(status: &str, waiting: i64, detail: Option<&str>, active: bool) -> ZcodeRow {
         ZcodeRow {
             task_id: "sess_test".into(),
             title: Some("test".into()),

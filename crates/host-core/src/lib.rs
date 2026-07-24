@@ -3,8 +3,8 @@
 
 use agent_deck_board::SessionBoard;
 use agent_deck_protocol::{
-    home_dir, Action, BackendId, BoardState, DeckStatus, LedFrame, ProjectCategory, SessionSnapshot,
-    DONE_TTL_MS, DONE_TTL_UNOPENED_MS,
+    home_dir, Action, BackendId, BoardState, DeckStatus, LedFrame, ProjectCategory,
+    SessionSnapshot, DONE_TTL_MS, DONE_TTL_UNOPENED_MS,
 };
 use agent_deck_zcode::{SqliteObserver, SqliteObserverOptions};
 use serde::{Deserialize, Serialize};
@@ -313,20 +313,19 @@ impl HostCore {
         }
 
         if config.enable_workbuddy {
-            let workbuddy_projects_dir = config
-                .workbuddy_projects_dir
-                .clone()
-                .unwrap_or_else(|| {
+            let workbuddy_projects_dir =
+                config.workbuddy_projects_dir.clone().unwrap_or_else(|| {
                     let home = home_dir();
                     home.join(".workbuddy/projects")
                 });
-            let mut workbuddy =
-                agent_deck_workbuddy::JsonlObserver::new(agent_deck_workbuddy::JsonlObserverOptions {
+            let mut workbuddy = agent_deck_workbuddy::JsonlObserver::new(
+                agent_deck_workbuddy::JsonlObserverOptions {
                     projects_dir: workbuddy_projects_dir,
                     exclude_workspaces: config.exclude_workspaces.clone(),
                     exclude_task_ids: config.exclude_task_ids.clone(),
                     ..Default::default()
-                });
+                },
+            );
             // Missing tree is fine — observer stays empty.
             let _ = workbuddy.open();
             observers.push(Box::new(workbuddy));
@@ -366,8 +365,7 @@ impl HostCore {
     }
 
     pub fn mark_opened_at(&mut self, backend: BackendId, session_id: &str, now: u64) {
-        self.opened_at
-            .insert(opened_key(backend, session_id), now);
+        self.opened_at.insert(opened_key(backend, session_id), now);
     }
 
     /// Poll all backends once and recompute board using wall clock.
@@ -403,13 +401,8 @@ impl HostCore {
             // live instead of frozen at its bind-time snapshot.
             if !pinned_ids.is_empty() {
                 if let Ok(pinned_snaps) = obs.poll_pinned(&pinned_ids) {
-                    let pinned_snaps = apply_done_decay(
-                        pinned_snaps,
-                        &opened_at,
-                        now,
-                        after_open_ms,
-                        unopened_ms,
-                    );
+                    let pinned_snaps =
+                        apply_done_decay(pinned_snaps, &opened_at, now, after_open_ms, unopened_ms);
                     self.board.upsert_sessions(pinned_snaps, now);
                 }
             }
@@ -970,10 +963,7 @@ mod tests {
             dispatched: std::sync::Mutex::new(vec![]),
             supported: vec!["stop"],
         };
-        let mut host = HostCore::with_observers(
-            5,
-            vec![Box::new(zcode_obs), Box::new(codex_obs)],
-        );
+        let mut host = HostCore::with_observers(5, vec![Box::new(zcode_obs), Box::new(codex_obs)]);
         host.tick_at(1000).unwrap();
         // Sanity: confirm the allocation we rely on.
         let board = host.board_state().unwrap();
@@ -1000,7 +990,10 @@ mod tests {
         let mut host = HostCore::with_observers(5, vec![Box::new(zcode_obs)]);
         host.tick_at(1000).unwrap();
         let r = host.dispatch_action(&Action::Accept { i: Some(0) });
-        assert!(r.contains("empty_slot") || r.contains("no_target"), "got: {r}");
+        assert!(
+            r.contains("empty_slot") || r.contains("no_target"),
+            "got: {r}"
+        );
     }
 
     #[test]
@@ -1018,10 +1011,7 @@ mod tests {
             dispatched: std::sync::Mutex::new(vec![]),
             supported: vec![],
         };
-        let mut host = HostCore::with_observers(
-            5,
-            vec![Box::new(zcode_obs), Box::new(codex_obs)],
-        );
+        let mut host = HostCore::with_observers(5, vec![Box::new(zcode_obs), Box::new(codex_obs)]);
         host.tick_at(1000).unwrap();
         // Focus is 0 (codex), but we explicitly target slot 1 (zcode), which
         // supports accept → ok. Proves explicit `i` wins over focus.
@@ -1044,7 +1034,10 @@ mod tests {
             parse_ui_action("stp").unwrap(),
             Action::Stop { i: None }
         ));
-        assert!(matches!(parse_ui_action("stop_all").unwrap(), Action::StopAll));
+        assert!(matches!(
+            parse_ui_action("stop_all").unwrap(),
+            Action::StopAll
+        ));
         assert!(parse_ui_action("nope").is_none());
     }
 
@@ -1059,8 +1052,8 @@ mod tests {
             waiting_since: None,
             updated_at: done_since,
             workspace_path: None,
-                project_category: None,
-                project_label: None,
+            project_category: None,
+            project_label: None,
         }
     }
 
@@ -1075,8 +1068,8 @@ mod tests {
             waiting_since: None,
             updated_at: done_since,
             workspace_path: None,
-                project_category: None,
-                project_label: None,
+            project_category: None,
+            project_label: None,
         }
     }
 
@@ -1109,13 +1102,7 @@ mod tests {
         let now = opened + DONE_TTL_MS - 1;
         let snap = wb_done("s1", done_since);
         assert_eq!(
-            decay_done_status(
-                &snap,
-                Some(opened),
-                now,
-                DONE_TTL_MS,
-                DONE_TTL_UNOPENED_MS
-            ),
+            decay_done_status(&snap, Some(opened), now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
             DeckStatus::Done
         );
     }
@@ -1127,13 +1114,7 @@ mod tests {
         let now = opened + DONE_TTL_MS + 1;
         let snap = wb_done("s1", done_since);
         assert_eq!(
-            decay_done_status(
-                &snap,
-                Some(opened),
-                now,
-                DONE_TTL_MS,
-                DONE_TTL_UNOPENED_MS
-            ),
+            decay_done_status(&snap, Some(opened), now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
             DeckStatus::Idle
         );
     }
@@ -1146,13 +1127,7 @@ mod tests {
         let now = done_since + DONE_TTL_MS + 60_000; // past short TTL from open
         let snap = wb_done("s1", done_since);
         assert_eq!(
-            decay_done_status(
-                &snap,
-                Some(opened),
-                now,
-                DONE_TTL_MS,
-                DONE_TTL_UNOPENED_MS
-            ),
+            decay_done_status(&snap, Some(opened), now, DONE_TTL_MS, DONE_TTL_UNOPENED_MS),
             DeckStatus::Done
         );
     }

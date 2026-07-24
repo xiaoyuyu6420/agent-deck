@@ -374,7 +374,13 @@ fn app_running(pattern: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
         let output = Command::new("tasklist")
-            .args(["/FI", &format!("IMAGENAME eq {pattern}"), "/FO", "CSV", "/NH"])
+            .args([
+                "/FI",
+                &format!("IMAGENAME eq {pattern}"),
+                "/FO",
+                "CSV",
+                "/NH",
+            ])
             .output();
         match output {
             Ok(o) => {
